@@ -1,7 +1,11 @@
+mod resize;
+
 use std::io::{stdout, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time;
+
+use crate::resize::LayoutResize;
 
 use crossterm::{
     event::{
@@ -35,32 +39,59 @@ enum BorderSelection {
     BottomRight,
 }
 
-fn is_border_selection(rect: &Rect, margin: u16, x: u16, y: u16) -> Option<BorderSelection> {
-    let left_right = if x >= rect.left() && x < (rect.left() + margin) {
-        -1
-    } else if x >= (rect.right() - margin) && x < rect.right() {
-        1
-    } else {
-        0
-    };
-    let top_bottom = if y >= rect.top() && y < (rect.top() + margin) {
-        -1
-    } else if y >= (rect.bottom() - margin) && y < rect.bottom() {
-        1
-    } else {
-        0
-    };
-    match (left_right, top_bottom) {
-        (-1, -1) => Some(BorderSelection::TopLeft),
-        (-1, 1) => Some(BorderSelection::BottomLeft),
-        (1, -1) => Some(BorderSelection::TopRight),
-        (1, 1) => Some(BorderSelection::BottomRight),
-        (-1, _) => Some(BorderSelection::Left),
-        (1, _) => Some(BorderSelection::Right),
-        (_, -1) => Some(BorderSelection::Top),
-        (_, 1) => Some(BorderSelection::Bottom),
-        _ => None,
-    }
+fn generate_test_text() -> Text<'static> {
+    let mut text = Text::styled(
+        "_One_|__",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::UNDERLINED),
+    );
+
+    let spans = Spans::from(vec![
+        Span::styled("      ", Style::default().bg(Color::Indexed(245))),
+        Span::styled(
+            "|  |    ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+        Span::styled(
+            "X      ",
+            Style::default().fg(Color::Black).bg(Color::Indexed(245)),
+        ),
+        Span::styled("      ", Style::default().bg(Color::Indexed(88))),
+        Span::styled("      ", Style::default().bg(Color::Indexed(21))),
+    ]);
+    text.extend(Text::from(spans));
+
+    // let spans = Spans::from(vec![
+    //     Span::styled("         ", Style::default().bg(Color::White)),
+    //     Span::styled(
+    //         "|      |",
+    //         Style::default()
+    //             .fg(Color::White)
+    //             .add_modifier(Modifier::UNDERLINED),
+    //     ),
+    //     Span::styled("    ", Style::default().bg(Color::White)),
+    // ]);
+    // text.extend(Text::from(spans));
+
+    // let spans = Spans::from(vec![
+    //     Span::styled("       ", Style::default().bg(Color::White)),
+    //     Span::styled(
+    //         "\\      /",
+    //         Style::default()
+    //             .fg(Color::White)
+    //             .add_modifier(Modifier::UNDERLINED),
+    //     ),
+    //     Span::styled("      ", Style::default().bg(Color::White)),
+    // ]);
+    // text.extend(Text::from(spans));
+
+    text.extend(Text::styled("Two\n", Style::default().fg(Color::White)));
+    text.extend(Text::from(Span::styled("Three", Style::default())));
+
+    text
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,15 +216,6 @@ impl NaluFocus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum NaluDrag {
-    BrowserRight,
-    ListLeft,
-    ListRight,
-    ViewerLeft,
-    None,
-}
-
 // h for help menu, q to quit, esc to main menu
 fn main() -> Result<()> {
     enable_raw_mode().expect("can run in raw mode");
@@ -201,48 +223,19 @@ fn main() -> Result<()> {
     let mut stdout = stdout();
 
     let (tx, rx) = mpsc::channel();
-    // let tick_rate = Duration::from_millis(200);
     thread::spawn(move || {
-        // let mut last_tick = Instant::now();
         loop {
-            // let timeout = tick_rate
-            //     .checked_sub(last_tick.elapsed())
-            //     .unwrap_or_else(|| Duration::from_secs(0));
-
             if event::poll(time::Duration::from_millis(100)).expect("poll works") {
                 tx.send(event::read().expect("can read events"))
                     .expect("can send events");
-
-                // if let CrosstermEvent::Key(key) = event::read().expect("can read events") {
-                // }
             }
-
-            // if last_tick.elapsed() >= tick_rate {
-            //     if let Ok(_) = tx.send(Event::Tick) {
-            //         last_tick = Instant::now();
-            //     }
-            // }
-
             // thread::sleep(std::time::Duration::from_millis(10));
         }
     });
 
-    // for y in 0..40 {
-    //     for x in 0..150 {
-    //         if (y == 0 || y == 40 - 1) || (x == 0 || x == 150 - 1) {
-    //             // in this loop we are more efficient by not flushing the buffer.
-    //             stdout
-    //                 .queue(cursor::MoveTo(x, y))?
-    //                 .queue(style::PrintStyledContent("█".magenta()))?;
-    //         }
-    //     }
-    // }
-    // stdout.flush()?;
-
     // let (cols, rows) = size()?;
     // // Resize terminal and scroll up.
     // execute!(stdout, SetSize(10, 10), ScrollUp(5))?;
-
     // // Be a good citizen, cleanup
     // execute!(stdout, SetSize(cols, rows))?;
 
@@ -296,34 +289,16 @@ fn main() -> Result<()> {
     let mut key_event = None;
     let mut nalu_state = NaluState::MainWindow;
     let mut nalu_focus = NaluFocus::None;
-    let mut nalu_drag = NaluDrag::None;
-    let mut sizing_ratio_browser = (1, 5);
-    let mut sizing_ratio_list = (1, 5);
+    let mut nalu_resize = LayoutResize::new([1, 1, 3], 2);
     loop {
         terminal.draw(|rect| {
             let main_chunks = main_layout.split(rect.size());
-            // Work out what the size of the waveform window should be
-            let window_width = main_chunks[1].width;
-            sizing_ratio_browser = (
-                sizing_ratio_browser.0 * window_width / sizing_ratio_browser.1,
-                window_width,
-            );
-            sizing_ratio_list = (
-                sizing_ratio_list.0 * window_width / sizing_ratio_list.1,
-                window_width,
-            );
-            let viewer_width = window_width - sizing_ratio_browser.0 - sizing_ratio_list.0;
-            let sizing_ratio_viewer = (viewer_width, window_width);
-            let waveform_layout = waveform_layout.clone().constraints(
-                [
-                    Constraint::Length(sizing_ratio_browser.0),
-                    Constraint::Length(sizing_ratio_list.0),
-                    Constraint::Length(viewer_width),
-                ]
-                .as_ref(),
-            );
 
-            let waveform_chunks = waveform_layout.split(main_chunks[1]);
+            // Handle resizing
+            let waveform_chunk = main_chunks[1];
+            nalu_resize.resize_container(waveform_chunk.width);
+            let waveform_layout = nalu_resize.constrain_layout(waveform_layout.clone());
+            let waveform_chunks = waveform_layout.split(waveform_chunk);
 
             if let Some((x, y, mouse_kind)) = mouse_event {
                 match mouse_kind {
@@ -336,87 +311,25 @@ fn main() -> Result<()> {
                             waveform_chunks[2].intersects(r),
                             main_chunks[2].intersects(r),
                         );
-                        if waveform_chunks[0].intersects(r) {
-                            if waveform_chunks[0].right() - 1 == x {
-                                nalu_drag = NaluDrag::BrowserRight;
-                            }
-                        }
-                        if waveform_chunks[1].intersects(r) {
-                            if waveform_chunks[1].left() == x {
-                                nalu_drag = NaluDrag::ListLeft;
-                            }
-                            if waveform_chunks[1].right() - 1 == x {
-                                nalu_drag = NaluDrag::ListRight;
-                            }
-                        }
-                        if waveform_chunks[2].intersects(r) {
-                            if waveform_chunks[2].left() == x {
-                                nalu_drag = NaluDrag::ViewerLeft;
-                            }
+                        if waveform_chunk.intersects(r) {
+                            nalu_resize.handle_mouse_down(x, 1);
+                        } else {
+                            nalu_resize.handle_mouse_done();
                         }
                     }
                     MouseEventKind::Drag(MouseButton::Left) => {
-                        //
-                        match nalu_drag.clone() {
-                            NaluDrag::BrowserRight => {
-                                let border = waveform_chunks[0].right() - 1;
-                                let dragged = x as i16 - border as i16;
-                                if (sizing_ratio_browser.0 as i16 + dragged > 2)
-                                    && (sizing_ratio_list.0 as i16 - dragged > 2)
-                                {
-                                    sizing_ratio_browser.0 =
-                                        (sizing_ratio_browser.0 as i16 + dragged) as u16;
-                                    sizing_ratio_list.0 =
-                                        (sizing_ratio_list.0 as i16 - dragged) as u16
-                                }
-                            }
-                            NaluDrag::ListLeft => {
-                                let border = waveform_chunks[1].left();
-                                let dragged = x as i16 - border as i16;
-                                if (sizing_ratio_browser.0 as i16 + dragged > 2)
-                                    && (sizing_ratio_list.0 as i16 - dragged > 2)
-                                {
-                                    sizing_ratio_browser.0 =
-                                        (sizing_ratio_browser.0 as i16 + dragged) as u16;
-                                    sizing_ratio_list.0 =
-                                        (sizing_ratio_list.0 as i16 - dragged) as u16
-                                }
-                            }
-                            NaluDrag::ListRight => {
-                                let border = waveform_chunks[1].right() - 1;
-                                let dragged = x as i16 - border as i16;
-                                if (sizing_ratio_list.0 as i16 + dragged > 2)
-                                    && (sizing_ratio_viewer.0 as i16 - dragged > 2)
-                                {
-                                    sizing_ratio_list.0 =
-                                        (sizing_ratio_list.0 as i16 + dragged) as u16;
-                                }
-                            }
-                            NaluDrag::ViewerLeft => {
-                                let border = waveform_chunks[2].left();
-                                let dragged = x as i16 - border as i16;
-                                if (sizing_ratio_list.0 as i16 + dragged > 2)
-                                    && (sizing_ratio_viewer.0 as i16 - dragged > 2)
-                                {
-                                    sizing_ratio_list.0 =
-                                        (sizing_ratio_list.0 as i16 + dragged) as u16;
-                                }
-                            }
-                            _ => {}
-                        }
+                        nalu_resize.handle_mouse_drag(x);
                     }
                     _ => {
-                        nalu_drag = NaluDrag::None;
+                        nalu_resize.handle_mouse_done();
                     }
                 }
             }
 
             if let Some(key) = key_event {
                 nalu_focus = nalu_focus.clone().next_from_key(key);
-                nalu_drag = NaluDrag::None;
+                nalu_resize.handle_mouse_done();
             }
-
-            let mouse_rect = Rect::new(coord.0, coord.1, 1, 1);
 
             // let footer = Paragraph::new("nalu v0.1 (Press q for help)")
             //     .style(Style::default().fg(Color::LightCyan))
@@ -426,57 +339,6 @@ fn main() -> Result<()> {
             // } else {
             //     block_default.clone()
             // });
-
-            let mut text = Text::styled(
-                "_One_|__",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::UNDERLINED),
-            );
-
-            let spans = Spans::from(vec![
-                Span::styled("      ", Style::default().bg(Color::Indexed(245))),
-                Span::styled(
-                    "|  |    ",
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::UNDERLINED),
-                ),
-                Span::styled(
-                    "X      ",
-                    Style::default().fg(Color::Black).bg(Color::Indexed(245)),
-                ),
-                Span::styled("      ", Style::default().bg(Color::Indexed(88))),
-                Span::styled("      ", Style::default().bg(Color::Indexed(21))),
-            ]);
-            text.extend(Text::from(spans));
-
-            // let spans = Spans::from(vec![
-            //     Span::styled("         ", Style::default().bg(Color::White)),
-            //     Span::styled(
-            //         "|      |",
-            //         Style::default()
-            //             .fg(Color::White)
-            //             .add_modifier(Modifier::UNDERLINED),
-            //     ),
-            //     Span::styled("    ", Style::default().bg(Color::White)),
-            // ]);
-            // text.extend(Text::from(spans));
-
-            // let spans = Spans::from(vec![
-            //     Span::styled("       ", Style::default().bg(Color::White)),
-            //     Span::styled(
-            //         "\\      /",
-            //         Style::default()
-            //             .fg(Color::White)
-            //             .add_modifier(Modifier::UNDERLINED),
-            //     ),
-            //     Span::styled("      ", Style::default().bg(Color::White)),
-            // ]);
-            // text.extend(Text::from(spans));
-
-            text.extend(Text::styled("Two\n", Style::default().fg(Color::White)));
-            text.extend(Text::from(Span::styled("Three", Style::default())));
 
             let header =
                 Paragraph::new(format!("nalu v0.1 (Press q for help, Ctrl+p for palette)",))
@@ -505,7 +367,7 @@ fn main() -> Result<()> {
                     block_default.clone()
                 });
 
-            let waveform_viewer = Paragraph::new(text)
+            let waveform_viewer = Paragraph::new(generate_test_text())
                 .style(Style::default().fg(Color::LightCyan))
                 .alignment(Alignment::Left)
                 .block(if nalu_focus.clone() == NaluFocus::Viewer {
@@ -532,17 +394,6 @@ fn main() -> Result<()> {
             rect.render_widget(waveform_list, waveform_chunks[1]);
             rect.render_widget(waveform_viewer, waveform_chunks[2]);
             rect.render_widget(filter, main_chunks[2]);
-            // rect.render_widget(footer, main_chunks[3]);
-            // let mouse_test = Paragraph::new(if let Some((x, y)) = coord {
-            //     format!("{}", format!("Clicked: {}x{}", x, y))
-            // } else {
-            //     format!("")
-            // })
-            // .style(
-            //     Style::default().fg(Color::LightCyan), // .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            // )
-            // .alignment(Alignment::Left)
-            // .block(block_default.clone());
 
             // let menu = menu_titles
             //     .iter()
@@ -593,19 +444,6 @@ fn main() -> Result<()> {
         }
 
         // thread::sleep(std::time::Duration::from_millis(100));
-
-        // match rx.recv()? {
-        //     Event::Input(event) => match event.code {
-        //         KeyCode::Char('q') => {
-        //             disable_raw_mode()?;
-        //             terminal.show_cursor()?;
-        //             break;
-        //         }
-
-        //         _ => {}
-        //     },
-        //     Event::Tick => {}
-        // }
     }
 
     terminal.backend_mut().queue(DisableMouseCapture)?;
