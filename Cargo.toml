@@ -2,12 +2,18 @@
 name = "nalu"
 version = "0.1.0"
 edition = "2021"
+description = "A fast command line tool for viewing and verifying VCD waveform files."
 
 [dependencies]
+crossbeam = "0.8.1"
 bytes = "1.1.0"
+log = "0.4.0"
+simple_logger = "1.11.0"
+humansize = "1.1.1"
+crossterm = "0.23.1"
 serde = {version = "1.0.130", features = ["derive"]}
+clap = { version = "3.1.8", features = ["derive"] }
+tui = {version=  "0.17.0", path = "../tui-rs"}
 byte_storage = { path = "../byte_storage" }
 no_discrimination = { path = "../no_discrimination" }
 vcd_parser = { path = "../vcd_parser" }
-crossterm = "0.23.1"
-tui = {version=  "0.17.0", path = "../tui-rs"}

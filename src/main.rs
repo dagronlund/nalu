@@ -1,42 +1,36 @@
 mod resize;
+mod state;
+mod vcd;
 
-use std::io::{stdout, Write};
-use std::sync::mpsc;
+use std::io::{stdout, Stdout, Write};
+use std::path::PathBuf;
 use std::thread;
 use std::time;
 
-use crate::resize::LayoutResize;
+use clap::Parser;
+use crossbeam::channel::{unbounded, Sender};
+
+use crate::state::*;
 
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode,
-        MouseButton, MouseEvent, MouseEventKind,
-    },
-    style::{Attribute, Stylize},
-    terminal::{
-        self, disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     tty::IsTty,
-    ExecutableCommand, QueueableCommand, Result,
+    QueueableCommand, Result,
 };
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
-    Terminal,
+    widgets::{Block, BorderType, Borders, Gauge, Paragraph},
+    Frame, Terminal,
 };
 
-enum BorderSelection {
-    Top,
-    Bottom,
-    Left,
-    Right,
-    TopLeft,
-    BottomLeft,
-    TopRight,
-    BottomRight,
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct NaluArgs {
+    vcd_file: String,
 }
 
 fn generate_test_text() -> Text<'static> {
@@ -94,366 +88,253 @@ fn generate_test_text() -> Text<'static> {
     text
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum NaluState {
-    MainWindow,
-    HelpWindow,
-    QuitWindow,
-    Quit,
-}
-
-impl NaluState {
-    fn next_from_key(self, key: KeyCode) -> Self {
-        match self {
-            Self::MainWindow => match key {
-                KeyCode::Char('q') => Self::Quit,
-                KeyCode::Char('h') => Self::HelpWindow,
-                KeyCode::Esc => Self::QuitWindow,
-                _ => Self::MainWindow,
-            },
-            Self::HelpWindow => match key {
-                KeyCode::Char('q') => Self::Quit,
-                KeyCode::Esc => Self::MainWindow,
-                _ => Self::HelpWindow,
-            },
-            Self::QuitWindow => match key {
-                KeyCode::Enter | KeyCode::Char('q') => Self::Quit,
-                KeyCode::Esc => Self::MainWindow,
-                _ => Self::QuitWindow,
-            },
-            _ => self,
-        }
+fn get_block<'a>(focus: Option<NaluFocusType>, title: Option<&'a str>) -> Block<'a> {
+    let color = match focus {
+        Some(NaluFocusType::Full) => Color::Red,
+        Some(NaluFocusType::Partial) => Color::Yellow,
+        None => Color::White,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().fg(color))
+        .border_type(BorderType::Rounded);
+    if let Some(title) = title {
+        block.title(title)
+    } else {
+        block
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum NaluFocus {
-    Browser,
-    List,
-    Viewer,
-    Filter,
-    BrowserPartial,
-    ListPartial,
-    ViewerPartial,
-    FilterPartial,
-    None,
-}
-
-impl NaluFocus {
-    fn next_from_mouse(
-        self,
-        browser_clicked: bool,
-        list_clicked: bool,
-        viewer_clicked: bool,
-        filter_clicked: bool,
-    ) -> Self {
-        if browser_clicked {
-            Self::Browser
-        } else if list_clicked {
-            Self::List
-        } else if viewer_clicked {
-            Self::Viewer
-        } else if filter_clicked {
-            Self::Filter
-        } else {
-            Self::None
-        }
-    }
-
-    fn next_from_key(self, key: KeyCode) -> Self {
-        match self {
-            Self::Browser => match key {
-                KeyCode::Esc => Self::BrowserPartial,
-                _ => self,
-            },
-            Self::List => match key {
-                KeyCode::Esc => Self::ListPartial,
-                _ => self,
-            },
-            Self::Viewer => match key {
-                KeyCode::Esc => Self::ViewerPartial,
-                _ => self,
-            },
-            Self::Filter => match key {
-                KeyCode::Esc => Self::FilterPartial,
-                _ => self,
-            },
-            Self::BrowserPartial => match key {
-                KeyCode::Enter => Self::Browser,
-                KeyCode::Esc => Self::None,
-                KeyCode::Right => Self::ListPartial,
-                KeyCode::Down => Self::FilterPartial,
-                _ => self,
-            },
-            Self::ListPartial => match key {
-                KeyCode::Enter => Self::List,
-                KeyCode::Esc => Self::None,
-                KeyCode::Left => Self::BrowserPartial,
-                KeyCode::Right => Self::ViewerPartial,
-                KeyCode::Down => Self::FilterPartial,
-                _ => self,
-            },
-            Self::ViewerPartial => match key {
-                KeyCode::Enter => Self::Viewer,
-                KeyCode::Esc => Self::None,
-                KeyCode::Left => Self::ListPartial,
-                KeyCode::Down => Self::FilterPartial,
-                _ => self,
-            },
-            Self::FilterPartial => match key {
-                KeyCode::Enter => Self::Filter,
-                KeyCode::Esc => Self::None,
-                KeyCode::Up => Self::BrowserPartial,
-                _ => self,
-            },
-            Self::None => match key {
-                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Enter => {
-                    Self::BrowserPartial
-                }
-                _ => Self::None,
-            },
-        }
-    }
-}
-
-// h for help menu, q to quit, esc to main menu
-fn main() -> Result<()> {
-    enable_raw_mode().expect("can run in raw mode");
-
-    let mut stdout = stdout();
-
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        loop {
-            if event::poll(time::Duration::from_millis(100)).expect("poll works") {
-                tx.send(event::read().expect("can read events"))
-                    .expect("can send events");
-            }
-            // thread::sleep(std::time::Duration::from_millis(10));
+fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
+    thread::spawn(move || loop {
+        if event::poll(time::Duration::from_millis(100)).unwrap() {
+            tx.send(event::read().unwrap()).unwrap();
         }
     });
+}
 
-    // let (cols, rows) = size()?;
-    // // Resize terminal and scroll up.
-    // execute!(stdout, SetSize(10, 10), ScrollUp(5))?;
-    // // Be a good citizen, cleanup
-    // execute!(stdout, SetSize(cols, rows))?;
-
-    stdout.execute(EnableMouseCapture);
-    stdout.execute(EnterAlternateScreen);
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-
-    let block_default = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().fg(Color::White))
-        .border_type(BorderType::Rounded);
-
-    let block_partial_focus = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Yellow))
-        .border_type(BorderType::Rounded);
-
-    let block_focus = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Red))
-        .border_type(BorderType::Rounded);
-
-    let main_layout = Layout::default()
+fn get_main_layout() -> Layout {
+    Layout::default()
         .direction(Direction::Vertical)
         .margin(0)
-        .constraints(
-            [
-                Constraint::Length(1),
-                Constraint::Min(2),
-                Constraint::Length(3),
-            ]
-            .as_ref(),
-        );
+        .constraints([Constraint::Length(1), Constraint::Min(2)].as_ref())
+}
 
-    let waveform_layout = Layout::default()
-        .direction(Direction::Horizontal)
+fn get_waveform_layout() -> Layout {
+    Layout::default().direction(Direction::Horizontal).margin(0)
+}
+
+fn get_browser_layout() -> Layout {
+    Layout::default()
+        .direction(Direction::Vertical)
         .margin(0)
-        .constraints(
-            [
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(3, 5),
-            ]
-            .as_ref(),
-        );
+        .constraints([Constraint::Min(2), Constraint::Length(3)].as_ref())
+}
 
-    let mut coord = (0, 0);
-    let mut mouse_event = None;
-    let mut key_event = None;
-    let mut nalu_state = NaluState::MainWindow;
-    let mut nalu_focus = NaluFocus::None;
-    let mut nalu_resize = LayoutResize::new([1, 1, 3], 2);
-    loop {
-        terminal.draw(|rect| {
-            let main_chunks = main_layout.split(rect.size());
+fn render_main_layout(
+    frame: &mut Frame<CrosstermBackend<std::io::Stdout>>,
+    nalu_state: &NaluState,
+    header_rect: Rect,
+    browser_rect: Rect,
+    filter_rect: Rect,
+    list_rect: Rect,
+    viewer_rect: Rect,
+) {
+    let header = Paragraph::new(format!(
+        "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
+        option_env!("CARGO_PKG_VERSION").unwrap_or("0.0.0")
+    ))
+    .style(Style::default().fg(Color::LightCyan))
+    .alignment(Alignment::Left);
 
-            // Handle resizing
-            let waveform_chunk = main_chunks[1];
-            nalu_resize.resize_container(waveform_chunk.width);
-            let waveform_layout = nalu_resize.constrain_layout(waveform_layout.clone());
-            let waveform_chunks = waveform_layout.split(waveform_chunk);
+    let waveform_browser = Paragraph::new("Waveform Browser")
+        .style(Style::default().fg(Color::LightCyan))
+        .alignment(Alignment::Left)
+        .block(get_block(
+            nalu_state.get_focus(NaluPanes::Browser),
+            Some("Browser"),
+        ));
 
-            if let Some((x, y, mouse_kind)) = mouse_event {
-                match mouse_kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        coord = (x, y);
-                        let r = Rect::new(x, y, 1, 1);
-                        nalu_focus = nalu_focus.clone().next_from_mouse(
-                            waveform_chunks[0].intersects(r),
-                            waveform_chunks[1].intersects(r),
-                            waveform_chunks[2].intersects(r),
-                            main_chunks[2].intersects(r),
-                        );
-                        if waveform_chunk.intersects(r) {
-                            nalu_resize.handle_mouse_down(x, 1);
-                        } else {
-                            nalu_resize.handle_mouse_done();
-                        }
-                    }
-                    MouseEventKind::Drag(MouseButton::Left) => {
-                        nalu_resize.handle_mouse_drag(x);
-                    }
-                    _ => {
-                        nalu_resize.handle_mouse_done();
-                    }
-                }
-            }
+    let waveform_list = Paragraph::new("Waveform List")
+        .style(Style::default().fg(Color::LightCyan))
+        .alignment(Alignment::Left)
+        .block(get_block(
+            nalu_state.get_focus(NaluPanes::List),
+            Some("List"),
+        ));
 
-            if let Some(key) = key_event {
-                nalu_focus = nalu_focus.clone().next_from_key(key);
-                nalu_resize.handle_mouse_done();
-            }
+    let waveform_viewer = Paragraph::new(generate_test_text())
+        .style(Style::default().fg(Color::LightCyan))
+        .alignment(Alignment::Left)
+        .block(get_block(
+            nalu_state.get_focus(NaluPanes::Viewer),
+            Some("Viewer"),
+        ));
 
-            // let footer = Paragraph::new("nalu v0.1 (Press q for help)")
-            //     .style(Style::default().fg(Color::LightCyan))
-            //     .alignment(Alignment::Left);
-            // .block(if main_chunks[2].intersects(mouse_rect.clone()) {
-            //     block_highlighted.clone()
-            // } else {
-            //     block_default.clone()
-            // });
+    let filter = Paragraph::new(nalu_state.get_filter())
+        .style(Style::default().fg(Color::LightCyan))
+        .alignment(Alignment::Left)
+        .block(get_block(
+            nalu_state.get_focus(NaluPanes::Filter),
+            Some("Filter"),
+        ));
 
-            let header =
-                Paragraph::new(format!("nalu v0.1 (Press q for help, Ctrl+p for palette)",))
-                    .style(Style::default().fg(Color::LightCyan))
-                    .alignment(Alignment::Left);
+    frame.render_widget(header, header_rect);
+    frame.render_widget(filter, filter_rect);
+    frame.render_widget(waveform_browser, browser_rect);
+    frame.render_widget(waveform_list, list_rect);
+    frame.render_widget(waveform_viewer, viewer_rect);
+}
 
-            let waveform_browser = Paragraph::new("Waveform Browser")
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Left)
-                .block(if nalu_focus.clone() == NaluFocus::Browser {
-                    block_focus.clone()
-                } else if nalu_focus.clone() == NaluFocus::BrowserPartial {
-                    block_partial_focus.clone()
-                } else {
-                    block_default.clone()
-                });
+fn get_overlay_rect(frame_rect: Rect, overlay_height: u16) -> Rect {
+    let (y, height) = if frame_rect.height <= overlay_height {
+        (0, frame_rect.height)
+    } else {
+        ((frame_rect.height - overlay_height) / 2, overlay_height)
+    };
+    let (x, width) = if frame_rect.width <= 4 {
+        (0, frame_rect.width)
+    } else {
+        (1, frame_rect.width - 2)
+    };
+    Rect::new(x, y, width, height)
+}
 
-            let waveform_list = Paragraph::new("Waveform List")
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Left)
-                .block(if nalu_focus.clone() == NaluFocus::List {
-                    block_focus.clone()
-                } else if nalu_focus.clone() == NaluFocus::ListPartial {
-                    block_partial_focus.clone()
-                } else {
-                    block_default.clone()
-                });
-
-            let waveform_viewer = Paragraph::new(generate_test_text())
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Left)
-                .block(if nalu_focus.clone() == NaluFocus::Viewer {
-                    block_focus.clone()
-                } else if nalu_focus.clone() == NaluFocus::ViewerPartial {
-                    block_partial_focus.clone()
-                } else {
-                    block_default.clone()
-                });
-
-            let filter = Paragraph::new("Filter: ")
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Left)
-                .block(if nalu_focus.clone() == NaluFocus::Filter {
-                    block_focus.clone()
-                } else if nalu_focus.clone() == NaluFocus::FilterPartial {
-                    block_partial_focus.clone()
-                } else {
-                    block_default.clone()
-                });
-
-            rect.render_widget(header, main_chunks[0]);
-            rect.render_widget(waveform_browser, waveform_chunks[0]);
-            rect.render_widget(waveform_list, waveform_chunks[1]);
-            rect.render_widget(waveform_viewer, waveform_chunks[2]);
-            rect.render_widget(filter, main_chunks[2]);
-
-            // let menu = menu_titles
-            //     .iter()
-            //     .map(|t| {
-            //         let (first, rest) = t.split_at(1);
-            //         Spans::from(vec![
-            //             Span::styled(
-            //                 first,
-            //                 Style::default()
-            //                     .fg(Color::Yellow)
-            //                     .add_modifier(Modifier::UNDERLINED),
-            //             ),
-            //             Span::styled(rest, Style::default().fg(Color::White)),
-            //         ])
-            //     })
-            //     .collect();
-
-            // let tabs = Tabs::new(menu)
-            //     .select(active_menu_item.into())
-            //     .block(Block::default().title("Menu").borders(Borders::ALL))
-            //     .style(Style::default().fg(Color::White))
-            //     .highlight_style(Style::default().fg(Color::Yellow))
-            //     .divider(Span::raw("|"));
-
-            // rect.render_widget(tabs, main_chunks[0]);
-            // rect.render_stateful_widget(left, pets_main_chunks[0], &mut pet_list_state);
-            // rect.render_widget(right, pets_main_chunks[1]);
-        })?;
-
-        match rx.recv() {
-            Ok(event) => {
-                key_event = None;
-                mouse_event = None;
-                match event {
-                    CrosstermEvent::Key(key) => {
-                        if key.code == KeyCode::Char('q') {
-                            break;
-                        }
-                        key_event = Some(key.code);
-                    }
-                    CrosstermEvent::Mouse(event) => {
-                        mouse_event = Some((event.column, event.row, event.kind));
-                    }
-                    CrosstermEvent::Resize(_, _) => {}
-                }
-            }
-            _ => {}
-        }
-
-        // thread::sleep(std::time::Duration::from_millis(100));
+fn render_overlay_layout(
+    frame: &mut Frame<CrosstermBackend<std::io::Stdout>>,
+    nalu_state: &NaluState,
+) {
+    match &nalu_state.get_overlay() {
+        NaluOverlay::Loading => frame.render_widget(
+            Gauge::default()
+                .block(get_block(None, Some("Loading")))
+                .gauge_style(Style::default().fg(Color::LightCyan))
+                .percent(nalu_state.get_percent() as u16),
+            get_overlay_rect(frame.size(), 3),
+        ),
+        NaluOverlay::HelpPrompt => frame.render_widget(
+            Paragraph::new("<Insert Help Messages>")
+                .block(get_block(None, Some("Help")))
+                .style(Style::default().fg(Color::LightCyan)),
+            get_overlay_rect(frame.size(), 10),
+        ),
+        NaluOverlay::QuitPrompt => frame.render_widget(
+            Paragraph::new("Press q to quit, esc to not...")
+                .block(get_block(None, Some("Quit?")))
+                .style(Style::default().fg(Color::LightCyan)),
+            get_overlay_rect(frame.size(), 3),
+        ),
+        NaluOverlay::Palette => frame.render_widget(
+            Paragraph::new(nalu_state.get_palette())
+                .block(get_block(None, Some("Palette")))
+                .style(Style::default().fg(Color::LightCyan)),
+            get_overlay_rect(frame.size(), 10),
+        ),
+        NaluOverlay::None => {}
     }
+}
 
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+    enable_raw_mode().unwrap();
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    terminal.backend_mut().queue(EnableMouseCapture)?;
+    terminal.backend_mut().queue(EnterAlternateScreen)?;
+    terminal.backend_mut().flush()?;
+    terminal.clear()?;
+    Ok(terminal)
+}
+
+fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, msg: String) -> Result<()> {
     terminal.backend_mut().queue(DisableMouseCapture)?;
     terminal.backend_mut().queue(LeaveAlternateScreen)?;
     terminal.backend_mut().flush()?;
     disable_raw_mode()?;
     terminal.show_cursor()?;
+    println!("{}", msg);
+    Ok(())
+}
 
-    // let mut stdout = stdout();
-    // println!("TTY: {}", stdout.is_tty());
+// h for help menu, q to quit, esc to main menu
+fn main() -> Result<()> {
+    if !stdout().is_tty() {
+        println!("Error: Cannot open viewer when not TTY!");
+        return Ok(());
+    }
+
+    // Setup event listeners
+    let args = NaluArgs::parse();
+    let (tx_input, rx_input) = unbounded();
+    spawn_input_listener(tx_input);
+
+    // Setup terminal for the TUI
+    let mut terminal = setup_terminal()?;
+
+    let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
+
+    loop {
+        let frame_start = std::time::Instant::now();
+
+        let mut browser_rect = Rect::new(0, 0, 0, 0);
+        let mut list_rect = Rect::new(0, 0, 0, 0);
+        let mut viewer_rect = Rect::new(0, 0, 0, 0);
+        let mut filter_rect = Rect::new(0, 0, 0, 0);
+
+        terminal.draw(|frame| {
+            // Resolve layout
+            let main_rects = get_main_layout().split(frame.size());
+            nalu_state
+                .get_resize_mut()
+                .resize_container(main_rects[1].width);
+            let waveform_layout = nalu_state
+                .get_resize()
+                .constrain_layout(get_waveform_layout());
+            let waveform_rects = waveform_layout.split(main_rects[1]);
+            let browser_filter_rects = get_browser_layout().split(waveform_rects[0]);
+
+            browser_rect = browser_filter_rects[0];
+            filter_rect = browser_filter_rects[1];
+            list_rect = waveform_rects[1];
+            viewer_rect = waveform_rects[2];
+
+            render_main_layout(
+                frame,
+                &nalu_state,
+                main_rects[0],
+                browser_rect,
+                filter_rect,
+                list_rect,
+                viewer_rect,
+            );
+            render_overlay_layout(frame, &nalu_state);
+        })?;
+
+        nalu_state.handle_vcd();
+
+        while !rx_input.is_empty() {
+            match rx_input.recv().unwrap() {
+                CrosstermEvent::Key(key) => nalu_state.handle_key(key.code),
+                CrosstermEvent::Mouse(event) => nalu_state.handle_mouse(
+                    event.column,
+                    event.row,
+                    event.kind,
+                    NaluSizing::new(browser_rect, list_rect, viewer_rect, filter_rect),
+                ),
+                CrosstermEvent::Resize(_, _) => {}
+            }
+        }
+
+        if let Some(msg) = nalu_state.get_done() {
+            cleanup_terminal(&mut terminal, msg)?;
+            break;
+        }
+
+        // Sleep for unused frame time
+        let frame_target = std::time::Duration::from_millis(20);
+        let frame_elapsed = frame_start.elapsed();
+        if frame_elapsed < frame_target {
+            thread::sleep(frame_target - frame_start.elapsed());
+        }
+    }
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use tui::layout::{Constraint, Layout};
 
 pub struct LayoutResize<const N: usize> {
     lengths: [u16; N],
