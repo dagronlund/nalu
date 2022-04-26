@@ -21,8 +21,7 @@ use crossterm::{
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    style::{Color, Style},
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame, Terminal,
 };
@@ -33,64 +32,9 @@ struct NaluArgs {
     vcd_file: String,
 }
 
-fn generate_test_text() -> Text<'static> {
-    let mut text = Text::styled(
-        "_One_|__",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::UNDERLINED),
-    );
-
-    let spans = Spans::from(vec![
-        Span::styled("      ", Style::default().bg(Color::Indexed(245))),
-        Span::styled(
-            "|  |    ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::UNDERLINED),
-        ),
-        Span::styled(
-            "X      ",
-            Style::default().fg(Color::Black).bg(Color::Indexed(245)),
-        ),
-        Span::styled("      ", Style::default().bg(Color::Indexed(88))),
-        Span::styled("      ", Style::default().bg(Color::Indexed(21))),
-    ]);
-    text.extend(Text::from(spans));
-
-    // let spans = Spans::from(vec![
-    //     Span::styled("         ", Style::default().bg(Color::White)),
-    //     Span::styled(
-    //         "|      |",
-    //         Style::default()
-    //             .fg(Color::White)
-    //             .add_modifier(Modifier::UNDERLINED),
-    //     ),
-    //     Span::styled("    ", Style::default().bg(Color::White)),
-    // ]);
-    // text.extend(Text::from(spans));
-
-    // let spans = Spans::from(vec![
-    //     Span::styled("       ", Style::default().bg(Color::White)),
-    //     Span::styled(
-    //         "\\      /",
-    //         Style::default()
-    //             .fg(Color::White)
-    //             .add_modifier(Modifier::UNDERLINED),
-    //     ),
-    //     Span::styled("      ", Style::default().bg(Color::White)),
-    // ]);
-    // text.extend(Text::from(spans));
-
-    text.extend(Text::styled("Two\n", Style::default().fg(Color::White)));
-    text.extend(Text::from(Span::styled("Three", Style::default())));
-
-    text
-}
-
 fn get_block<'a>(focus: Option<NaluFocusType>, title: Option<&'a str>) -> Block<'a> {
     let color = match focus {
-        Some(NaluFocusType::Full) => Color::Red,
+        Some(NaluFocusType::Full) => Color::Green,
         Some(NaluFocusType::Partial) => Color::Yellow,
         None => Color::White,
     };
@@ -147,7 +91,7 @@ fn render_main_layout(
     .style(Style::default().fg(Color::LightCyan))
     .alignment(Alignment::Left);
 
-    let waveform_browser = Paragraph::new("Waveform Browser")
+    let waveform_browser = Paragraph::new(nalu_state.get_browser_state().render())
         .style(Style::default().fg(Color::LightCyan))
         .alignment(Alignment::Left)
         .block(get_block(
@@ -155,7 +99,7 @@ fn render_main_layout(
             Some("Browser"),
         ));
 
-    let waveform_list = Paragraph::new("Waveform List")
+    let waveform_list = Paragraph::new(nalu_state.get_waveform_state().render_list())
         .style(Style::default().fg(Color::LightCyan))
         .alignment(Alignment::Left)
         .block(get_block(
@@ -163,7 +107,7 @@ fn render_main_layout(
             Some("List"),
         ));
 
-    let waveform_viewer = Paragraph::new(generate_test_text())
+    let waveform_viewer = Paragraph::new(nalu_state.get_waveform_state().render_waveform())
         .style(Style::default().fg(Color::LightCyan))
         .alignment(Alignment::Left)
         .block(get_block(
@@ -309,6 +253,12 @@ fn main() -> Result<()> {
         })?;
 
         nalu_state.handle_vcd();
+        nalu_state
+            .get_browser_state_mut()
+            .set_size(&browser_rect, 1);
+        nalu_state
+            .get_waveform_state_mut()
+            .set_size(&list_rect, &viewer_rect, 1);
 
         while !rx_input.is_empty() {
             match rx_input.recv().unwrap() {

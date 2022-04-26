@@ -10,10 +10,12 @@ bytes = "1.1.0"
 log = "0.4.0"
 simple_logger = "1.11.0"
 humansize = "1.1.1"
+alphanumeric-sort = "1.4.4"
 crossterm = "0.23.1"
 serde = {version = "1.0.130", features = ["derive"]}
 clap = { version = "3.1.8", features = ["derive"] }
-tui = {version=  "0.17.0", path = "../tui-rs"}
+tui = "0.18.0"
 byte_storage = { path = "../byte_storage" }
 no_discrimination = { path = "../no_discrimination" }
+crossbeam_helper = { path = "../crossbeam_helper" }
 vcd_parser = { path = "../vcd_parser" }

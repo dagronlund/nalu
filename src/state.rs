@@ -1,16 +1,22 @@
+mod browser;
+mod filter;
+mod utils;
+mod waveform;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-
-use crossbeam::channel::{unbounded, Receiver};
+use std::thread::JoinHandle;
 
 use vcd_parser::parser::VcdHeader;
 use vcd_parser::waveform::Waveform;
 
-use crate::resize::LayoutResize;
-use crate::vcd::*;
-
 use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use tui::layout::Rect;
+
+use crate::resize::LayoutResize;
+use crate::state::browser::BrowserState;
+use crate::state::waveform::WaveformState;
+use crate::vcd::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NaluOverlay {
@@ -28,7 +34,7 @@ fn edit_string(key: KeyCode, string: &mut String) {
                 string.remove(string.len() - 1);
             }
         }
-        KeyCode::Char(c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_' | ' ')) => {
+        KeyCode::Char(c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_' | ' ' | '*' | '.')) => {
             string.push(c);
         }
         _ => {}
@@ -79,7 +85,7 @@ impl NaluSizing {
 
 pub struct NaluState {
     vcd_path: PathBuf,
-    vcd_rx: Receiver<VcdResult<(VcdHeader, Waveform)>>,
+    vcd_handle: Option<JoinHandle<VcdResult<(VcdHeader, Waveform)>>>,
     overlay: NaluOverlay,
     focus: NaluFocus,
     resizing: LayoutResize<3>,
@@ -89,17 +95,18 @@ pub struct NaluState {
     filter_input: String,
     palette_input: String,
     done: Option<String>,
+    browser_state: BrowserState,
+    waveform_state: WaveformState,
 }
 
 impl NaluState {
     pub fn new(vcd_path: PathBuf) -> Self {
         // Load initial VCD file
         let progress = Arc::new(Mutex::new((0, 0)));
-        let (tx_vcd, rx_vcd) = unbounded();
-        load_vcd(vcd_path.clone(), tx_vcd, progress.clone());
+        let handle = load_vcd(vcd_path.clone(), progress.clone());
         Self {
             vcd_path: vcd_path,
-            vcd_rx: rx_vcd,
+            vcd_handle: Some(handle),
             overlay: NaluOverlay::Loading,
             focus: NaluFocus::None,
             resizing: LayoutResize::new([1, 1, 2], 2),
@@ -109,6 +116,8 @@ impl NaluState {
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
+            browser_state: BrowserState::new(),
+            waveform_state: WaveformState::new(),
         }
     }
 
@@ -128,7 +137,11 @@ impl NaluState {
         if sizing.browser.intersects(coord) {
             match self.focus {
                 NaluFocus::Browser(NaluFocusType::Full) => {
-                    // TODO: Handle passing mouse event to component
+                    let request = self.browser_state.handle_mouse_click(
+                        x - sizing.browser.left() - 1,
+                        y - sizing.browser.top() - 1,
+                    );
+                    self.waveform_state.browser_request(request);
                 }
                 _ => self.focus = NaluFocus::Browser(NaluFocusType::Full),
             }
@@ -137,7 +150,10 @@ impl NaluState {
         if sizing.list.intersects(coord) {
             match self.focus {
                 NaluFocus::List(NaluFocusType::Full) => {
-                    // TODO: Handle passing mouse event to component
+                    self.waveform_state.handle_mouse_click_list(
+                        x - sizing.list.left() - 1,
+                        y - sizing.list.top() - 1,
+                    );
                 }
                 _ => self.focus = NaluFocus::List(NaluFocusType::Full),
             }
@@ -145,18 +161,16 @@ impl NaluState {
 
         if sizing.viewer.intersects(coord) {
             match self.focus {
-                NaluFocus::Viewer(NaluFocusType::Full) => {
-                    // TODO: Handle passing mouse event to component
-                }
+                // TODO: Handle passing mouse event to component
+                NaluFocus::Viewer(NaluFocusType::Full) => {}
                 _ => self.focus = NaluFocus::Viewer(NaluFocusType::Full),
             }
         }
 
         if sizing.filter.intersects(coord) {
             match self.focus {
-                NaluFocus::Filter(NaluFocusType::Full) => {
-                    // TODO: Handle passing mouse event to component
-                }
+                // TODO: Handle passing mouse event to component
+                NaluFocus::Filter(NaluFocusType::Full) => {}
                 _ => self.focus = NaluFocus::Filter(NaluFocusType::Full),
             }
         }
@@ -175,8 +189,20 @@ impl NaluState {
         }
     }
 
-    fn handle_mouse_other(&mut self) {
+    fn handle_mouse_scroll(&mut self, scroll_up: bool) {
         self.resizing.handle_mouse_done();
+        match self.focus {
+            NaluFocus::Browser(NaluFocusType::Full) => {
+                self.browser_state.handle_mouse_scroll(scroll_up)
+            }
+            // TODO: Handle passing mouse event to component(s)
+            NaluFocus::List(NaluFocusType::Full) => {
+                self.waveform_state.handle_mouse_scroll_list(scroll_up)
+            }
+            NaluFocus::Viewer(NaluFocusType::Full) => {}
+            NaluFocus::Filter(NaluFocusType::Full) => {}
+            _ => {}
+        }
     }
 
     pub fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind, sizing: NaluSizing) {
@@ -187,34 +213,39 @@ impl NaluState {
         match kind {
             MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_click(x, y, sizing),
             MouseEventKind::Drag(MouseButton::Left) => self.handle_mouse_drag(x, y, sizing),
-            _ => self.handle_mouse_other(),
+            MouseEventKind::ScrollDown => self.handle_mouse_scroll(false),
+            MouseEventKind::ScrollUp => self.handle_mouse_scroll(true),
+            _ => self.resizing.handle_mouse_done(),
         }
     }
 
     fn handle_key_browser(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
-            _ => {
-                // TODO: Handle passing key event to component
+            key => {
+                let request = self.browser_state.handle_key(key);
+                self.waveform_state.browser_request(request);
             }
         }
     }
+
     fn handle_key_filter(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
-            _ => {
-                // TODO: Handle passing key event to component
+            key => {
+                edit_string(key, &mut self.filter_input);
+                self.browser_state.update_filter(self.filter_input.clone());
             }
         }
     }
+
     fn handle_key_list(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
-            _ => {
-                // TODO: Handle passing key event to component
-            }
+            key => self.waveform_state.handle_key_list(key),
         }
     }
+
     fn handle_key_viewer(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
@@ -309,7 +340,6 @@ impl NaluState {
             },
             NaluOverlay::None => match key {
                 KeyCode::Char('q') => self.done = Some(String::new()),
-                // KeyCode::Esc => self.overlay = NaluOverlay::QuitPrompt,
                 KeyCode::Char('h') => self.overlay = NaluOverlay::HelpPrompt,
                 KeyCode::Char('p') => self.overlay = NaluOverlay::Palette,
                 KeyCode::Char('r') => {
@@ -323,29 +353,32 @@ impl NaluState {
 
     pub fn handle_reload(&mut self) {
         *self.progress.lock().unwrap() = (0, 0);
-        let (tx_vcd, rx_vcd) = unbounded();
-        load_vcd(self.vcd_path.clone(), tx_vcd, self.progress.clone());
-        self.vcd_rx = rx_vcd;
+        self.vcd_handle = Some(load_vcd(self.vcd_path.clone(), self.progress.clone()));
     }
 
     pub fn handle_vcd(&mut self) {
-        if !self.vcd_rx.is_empty() {
-            match self.vcd_rx.recv().unwrap() {
-                Ok((vcd_header, waveform)) => {
-                    self.overlay = NaluOverlay::None;
-                    // Handle dropping large objects in another thread
-                    let mut vcd_header = vcd_header;
-                    let mut waveform = waveform;
-                    std::mem::swap(&mut self.vcd_header, &mut vcd_header);
-                    std::mem::swap(&mut self.waveform, &mut waveform);
-                    std::thread::spawn(move || {
-                        drop(waveform);
-                        drop(vcd_header);
-                    });
-                }
-                Err(err) => {
-                    self.done = Some(format!("VCD Loading Error: {:?}", err));
-                }
+        // Check if we have a handle to work with
+        if let None = &mut self.vcd_handle {
+            return;
+        }
+        // Wait for the thread to complete
+        let (current, total) = *self.progress.lock().unwrap();
+        if current < total || total == 0 {
+            return;
+        }
+        // Replace existing handle with none and extract values
+        let mut vcd_handle_swap = None;
+        std::mem::swap(&mut vcd_handle_swap, &mut self.vcd_handle);
+        match vcd_handle_swap.unwrap().join().unwrap() {
+            Ok((vcd_header, waveform)) => {
+                self.overlay = NaluOverlay::None;
+                self.vcd_header = vcd_header;
+                self.waveform = waveform;
+                self.browser_state
+                    .update_scopes(&self.vcd_header.get_scopes());
+            }
+            Err(err) => {
+                self.done = Some(format!("VCD Loading Error: {:?}", err));
             }
         }
     }
@@ -387,6 +420,22 @@ impl NaluState {
 
     pub fn get_palette(&self) -> String {
         self.palette_input.clone()
+    }
+
+    pub fn get_browser_state(&self) -> &BrowserState {
+        &self.browser_state
+    }
+
+    pub fn get_browser_state_mut(&mut self) -> &mut BrowserState {
+        &mut self.browser_state
+    }
+
+    pub fn get_waveform_state(&self) -> &WaveformState {
+        &self.waveform_state
+    }
+
+    pub fn get_waveform_state_mut(&mut self) -> &mut WaveformState {
+        &mut self.waveform_state
     }
 
     pub fn get_done(&self) -> Option<String> {
