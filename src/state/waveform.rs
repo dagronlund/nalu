@@ -7,6 +7,12 @@ use vcd_parser::parser::*;
 use crate::state::browser::BrowserRequest;
 use crate::state::utils::*;
 
+enum WaveformNode {
+    Group,
+    Spacer,
+    VectorSignal,
+}
+
 struct WaveformSignal {
     variable: VcdVariable,
     expanded: bool,

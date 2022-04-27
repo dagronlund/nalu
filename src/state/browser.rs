@@ -5,155 +5,56 @@ use crossterm::event::KeyCode;
 use tui::{layout::Rect, style::Style, text::Text};
 
 use crate::state::filter::*;
+use crate::state::tree::*;
 use crate::state::utils::*;
 
-fn search_scopes_name<'a>(
-    scopes: &'a Vec<BrowserScope>,
+fn search_nodes<'a>(
+    nodes: &'a Vec<TreeNode<VcdVariable, ()>>,
     name: &String,
-) -> Option<&'a BrowserScope> {
-    for scope in scopes {
-        if &scope.name == name {
-            return Some(scope);
+) -> Option<&'a TreeNode<VcdVariable, ()>> {
+    for node in nodes {
+        if node.get_name() == name {
+            return Some(node);
         }
     }
     None
 }
 
-struct BrowserScope {
-    name: String,
-    expanded: bool,
-    scopes: Vec<BrowserScope>,
-    variables: Vec<VcdVariable>,
-}
-
-impl BrowserScope {
-    fn empty() -> Self {
-        Self {
-            name: String::new(),
-            expanded: false,
-            scopes: Vec::new(),
-            variables: Vec::new(),
-        }
-    }
-
-    fn render(&self, text: &mut Text<'static>, offsets: &mut RenderContext) {
-        if !offsets.is_rendering() {
-            return;
-        }
-        let indents = "    ".repeat(offsets.get_indent_offset() as usize);
-        let line = Text::styled(
-            format!(
-                "{}{} {}",
-                indents,
-                if self.expanded { "[-]" } else { "[+]" },
-                self.name
-            ),
-            get_selected_style(offsets.is_selected()),
-        );
-        offsets.render_line(text, line);
-        if self.expanded {
-            offsets.do_indent();
-            for scope in &self.scopes {
-                scope.render(text, offsets);
-            }
-            for variable in &self.variables {
-                let line = Text::styled(
-                    format!(
-                        "{}{} {}",
-                        indents,
-                        variable.get_name(),
-                        variable.get_width()
-                    ),
-                    get_selected_style(offsets.is_selected()),
-                );
-                offsets.render_line(text, line);
-            }
-            offsets.undo_indent();
-        }
-    }
-
-    fn get_expanded_line_count(&self) -> usize {
-        let mut line_count = 1;
-        if self.expanded {
-            for scope in &self.scopes {
-                line_count += scope.get_expanded_line_count();
-            }
-            line_count += self.variables.len();
-        }
-        line_count
-    }
-
-    fn modify(&mut self, action: BrowserAction, select_offset: &mut isize) -> BrowserRequest {
-        *select_offset -= 1;
-        match *select_offset {
-            0 => match action {
-                BrowserAction::Append => return BrowserRequest::Append(self.variables.clone()),
-                BrowserAction::Insert => return BrowserRequest::Insert(self.variables.clone()),
-                BrowserAction::Expand => {
-                    self.expanded = !self.expanded;
-                    return BrowserRequest::None;
-                }
-            },
-            1.. => {}
-            _ => return BrowserRequest::None,
-        }
-        if self.expanded {
-            for scope in &mut self.scopes {
-                match scope.modify(action.clone(), select_offset) {
-                    BrowserRequest::None => {}
-                    request => return request,
-                }
-            }
-            for variable in &self.variables {
-                let v = vec![variable.clone()];
-                *select_offset -= 1;
-                match *select_offset {
-                    0 => match action {
-                        BrowserAction::Append => return BrowserRequest::Append(v),
-                        BrowserAction::Insert => return BrowserRequest::Insert(v),
-                        BrowserAction::Expand => return BrowserRequest::None,
-                    },
-                    1.. => {}
-                    _ => return BrowserRequest::None,
-                }
-            }
-        }
-        BrowserRequest::None
-    }
-}
-
-fn generate_new_scopes(
-    old_scopes: &Vec<BrowserScope>,
+fn generate_new_tree(
+    old_tree: &Vec<TreeNode<VcdVariable, ()>>,
     new_scopes: &Vec<VcdScope>,
-) -> Vec<BrowserScope> {
-    let mut generated_scopes = Vec::new();
+) -> TreeNodes<VcdVariable, ()> {
+    let mut generated_nodes = TreeNodes::new();
 
     for (i, new_scope) in new_scopes.into_iter().enumerate() {
-        let empty_scope = BrowserScope::empty();
-        let old_scope = if old_scopes.len() > i && new_scope.get_name() == &old_scopes[i].name {
+        let empty_node = TreeNode::default();
+        let old_scope = if old_tree.len() > i && new_scope.get_name() == old_tree[i].get_name() {
             // The scopes indices lined up from the new to the old
-            &old_scopes[i]
-        } else if let Some(old_scope) = search_scopes_name(&old_scopes, new_scope.get_name()) {
+            &old_tree[i]
+        } else if let Some(old_scope) = search_nodes(&old_tree, new_scope.get_name()) {
             // The scope existed in the old scopes, different position
             old_scope
         } else {
             // The scope did not exist in the old scopes
-            &empty_scope
+            &empty_node
         };
 
         let mut variables = new_scope.get_variables().clone();
         variables.sort_by(|a, b| alphanumeric_sort::compare_str(a.get_name(), b.get_name()));
 
-        generated_scopes.push(BrowserScope {
-            name: new_scope.get_name().clone(),
-            expanded: old_scope.expanded,
-            scopes: generate_new_scopes(&old_scope.scopes, &new_scopes[i].get_scopes()),
-            variables: variables,
-        });
+        generated_nodes.get_nodes_mut().push(TreeNode::new_from(
+            new_scope.get_name().clone(),
+            (),
+            old_scope.is_expanded(),
+            generate_new_tree(old_scope.get_nodes(), &new_scopes[i].get_scopes()).into_nodes(),
+            variables,
+        ));
     }
 
-    generated_scopes.sort_by(|a, b| alphanumeric_sort::compare_str(&a.name, &b.name));
-    generated_scopes
+    generated_nodes
+        .get_nodes_mut()
+        .sort_by(|a, b| alphanumeric_sort::compare_str(&a.get_name(), &b.get_name()));
+    generated_nodes
 }
 
 #[derive(Clone)]
@@ -172,7 +73,7 @@ pub enum BrowserRequest {
 pub struct BrowserState {
     width: usize,
     context: SelectContext,
-    scopes: Vec<BrowserScope>,
+    tree: TreeNodes<VcdVariable, ()>,
     filters: Vec<BrowserFilterSection>,
 }
 
@@ -181,7 +82,7 @@ impl BrowserState {
         Self {
             width: 0,
             context: SelectContext::new(),
-            scopes: Vec::new(),
+            tree: TreeNodes::new(),
             filters: Vec::new(),
         }
     }
@@ -192,8 +93,8 @@ impl BrowserState {
 
     pub fn update_scopes(&mut self, new_scopes: &Vec<VcdScope>) {
         // Set new scopes and clear the selected item
-        self.scopes = generate_new_scopes(&self.scopes, &new_scopes);
-        let line_count = self.get_expanded_line_count();
+        self.tree = generate_new_tree(&self.tree.get_nodes(), &new_scopes);
+        let line_count = self.rendered_len();
         self.context.select_relative(0, line_count);
     }
 
@@ -209,7 +110,7 @@ impl BrowserState {
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> BrowserRequest {
-        let line_count = self.get_expanded_line_count();
+        let line_count = self.rendered_len();
         match key {
             KeyCode::Up => self.context.select_relative(-1, line_count),
             KeyCode::Down => self.context.select_relative(1, line_count),
@@ -224,7 +125,7 @@ impl BrowserState {
     }
 
     pub fn handle_mouse_click(&mut self, _: u16, y: u16) -> BrowserRequest {
-        let line_count = self.get_expanded_line_count();
+        let line_count = self.rendered_len();
         if self.context.select_absolute(y as isize - 1, line_count) {
             return self.modify(BrowserAction::Expand);
         }
@@ -232,7 +133,7 @@ impl BrowserState {
     }
 
     pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
-        let line_count = self.get_expanded_line_count();
+        let line_count = self.rendered_len();
         self.context
             .select_relative(if scroll_up { -5 } else { 5 }, line_count);
     }
@@ -240,32 +141,34 @@ impl BrowserState {
     pub fn render(&self) -> Text<'static> {
         let mut text = Text::styled(" ", Style::default());
         let mut offsets = self.context.make_render_offsets();
-        for scope in &self.scopes {
-            scope.render(&mut text, &mut offsets);
-        }
+        self.tree.render(&mut text, &mut offsets, self.width);
         text
     }
 
-    fn get_expanded_line_count(&self) -> usize {
-        let mut line_count = 0;
-        for scope in &self.scopes {
-            line_count += scope.get_expanded_line_count();
-        }
-        line_count
+    fn rendered_len(&self) -> usize {
+        self.tree.rendered_len()
     }
 
     fn modify(&mut self, action: BrowserAction) -> BrowserRequest {
-        let mut select_offset = self.context.get_select_offset() + 1;
-        for scope in &mut self.scopes {
-            match scope.modify(action.clone(), &mut select_offset) {
-                BrowserRequest::None => {}
-                request => {
+        let mut select_offset = self.context.get_select_offset();
+        let selected = self.tree.get_selected_mut(&mut select_offset);
+
+        match selected {
+            TreeNodeSelected::Value(value) => match action {
+                BrowserAction::Append => BrowserRequest::Append(vec![value.clone()]),
+                BrowserAction::Insert => BrowserRequest::Insert(vec![value.clone()]),
+                BrowserAction::Expand => BrowserRequest::None,
+            },
+            TreeNodeSelected::Node(node) => match action {
+                BrowserAction::Append => BrowserRequest::Append(node.get_values().clone()),
+                BrowserAction::Insert => BrowserRequest::Insert(node.get_values().clone()),
+                BrowserAction::Expand => {
+                    node.set_expanded(!node.is_expanded());
                     self.context.scroll_relative(0);
-                    return request;
+                    BrowserRequest::None
                 }
-            }
+            },
+            TreeNodeSelected::None => BrowserRequest::None,
         }
-        self.context.scroll_relative(0);
-        BrowserRequest::None
     }
 }

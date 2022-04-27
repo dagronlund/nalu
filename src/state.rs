@@ -1,5 +1,6 @@
 mod browser;
 mod filter;
+mod tree;
 mod utils;
 mod waveform;
 
