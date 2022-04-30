@@ -5,58 +5,58 @@ use tui::{layout::Rect, style::Style, text::Text};
 use vcd_parser::parser::*;
 
 use crate::state::browser::BrowserRequest;
+use crate::state::tree::*;
 use crate::state::utils::*;
 
 enum WaveformNode {
-    Group,
     Spacer,
-    VectorSignal,
+    Group(String),
+    VectorSignal(VcdVariable),
+    VectorComponentSignal(VcdVariable, usize),
 }
 
-struct WaveformSignal {
-    variable: VcdVariable,
-    expanded: bool,
+impl std::fmt::Display for WaveformNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spacer => write!(f, ""),
+            Self::Group(name) => write!(f, "{}", name),
+            Self::VectorSignal(variable) => write!(f, "{}", variable),
+            Self::VectorComponentSignal(variable, index) => write!(f, "{} [{}]", variable, index),
+        }
+    }
 }
 
-impl WaveformSignal {
-    fn new(variable: VcdVariable) -> Self {
-        Self {
-            variable: variable,
-            expanded: false,
-        }
+impl Default for WaveformNode {
+    fn default() -> Self {
+        Self::Spacer
     }
+}
 
-    fn render(&self, text: &mut Text<'static>, offsets: &mut RenderContext) {
-        if !offsets.is_rendering() {
-            return;
-        }
-        let line = Text::styled(
-            format!(
-                "{} {} {}",
-                if self.expanded { "[-]" } else { "[+]" },
-                self.variable.get_name(),
-                self.variable.get_width(),
-            ),
-            get_selected_style(offsets.is_selected()),
-        );
-        offsets.render_line(text, line);
-        if self.expanded {
-            for bit in 0..self.variable.get_bit_width() {
-                let line = Text::styled(
-                    format!("    {} [{}]", self.variable.get_name(), bit),
-                    get_selected_style(offsets.is_selected()),
-                );
-                offsets.render_line(text, line);
-            }
-        }
+fn create_variable_node(variable: VcdVariable) -> TreeNode<WaveformNode> {
+    let mut variable_node = TreeNode::new(WaveformNode::VectorSignal(variable.clone()));
+    for i in 0..variable.get_bit_width() {
+        variable_node
+            .get_nodes_mut()
+            .push(TreeNode::new(WaveformNode::VectorComponentSignal(
+                variable.clone(),
+                i,
+            )));
     }
+    variable_node
+}
+
+#[derive(Clone)]
+enum ListAction {
+    Group,
+    Delete,
+    Expand,
 }
 
 pub struct WaveformState {
     list_width: usize,
     viewer_width: usize,
-    context: SelectContext,
-    signals: Vec<WaveformSignal>,
+    tree_select: TreeSelect,
+    tree: TreeNodes<WaveformNode>,
 }
 
 impl WaveformState {
@@ -64,19 +64,26 @@ impl WaveformState {
         Self {
             list_width: 0,
             viewer_width: 0,
-            context: SelectContext::new(),
-            signals: Vec::new(),
+            tree_select: TreeSelect::new(),
+            tree: TreeNodes::new(),
         }
     }
 
     pub fn browser_request(&mut self, request: BrowserRequest) {
         match request {
             BrowserRequest::Append(variables) => {
-                for v in variables {
-                    self.signals.push(WaveformSignal::new(v));
+                for variable in variables {
+                    self.tree.push(create_variable_node(variable));
                 }
             }
-            BrowserRequest::Insert(_) => {}
+            BrowserRequest::Insert(_) => {
+                let mut select_offset = self.tree_select.get_select_offset();
+                let selected = self.tree.get_selected_mut(&mut select_offset);
+                let selected = match selected {
+                    Some(selected) => selected,
+                    None => return,
+                };
+            }
             BrowserRequest::None => {}
         }
     }
@@ -94,43 +101,38 @@ impl WaveformState {
         };
         // Handle extra room for timescale
         let margin = border_width as isize * 2 + 1;
-        self.context.set_height(list_size.height as isize - margin);
+        self.tree_select
+            .set_height(list_size.height as isize - margin);
     }
 
     pub fn handle_key_list(&mut self, key: KeyCode) {
-        let line_count = self.get_expanded_line_count();
         match key {
-            KeyCode::Up => self.context.select_relative(-1, line_count),
-            KeyCode::Down => self.context.select_relative(1, line_count),
-            KeyCode::PageDown => self.context.select_relative(20, line_count),
-            KeyCode::PageUp => self.context.select_relative(-20, line_count),
-            KeyCode::Enter => {
-                self.toggle_expanded();
-                self.context.scroll_relative(0);
-            }
+            KeyCode::Up => self.tree_select.select_relative(&self.tree, -1),
+            KeyCode::Down => self.tree_select.select_relative(&self.tree, 1),
+            KeyCode::PageDown => self.tree_select.select_relative(&self.tree, 20),
+            KeyCode::PageUp => self.tree_select.select_relative(&self.tree, -20),
+            KeyCode::Enter => self.modify_list(ListAction::Expand),
+            KeyCode::Char('g') => self.modify_list(ListAction::Group),
+            KeyCode::Delete => self.modify_list(ListAction::Delete),
             _ => {}
         }
     }
 
     pub fn handle_mouse_click_list(&mut self, _: u16, y: u16) {
-        let line_count = self.get_expanded_line_count();
-        if self.context.select_absolute(y as isize - 1, line_count) {
-            self.toggle_expanded();
+        if self.tree_select.select_absolute(&self.tree, y as isize - 1) {
+            self.modify_list(ListAction::Expand);
         }
     }
 
     pub fn handle_mouse_scroll_list(&mut self, scroll_up: bool) {
-        let line_count = self.get_expanded_line_count();
-        self.context
-            .select_relative(if scroll_up { -5 } else { 5 }, line_count);
+        self.tree_select
+            .select_relative(&self.tree, if scroll_up { -5 } else { 5 });
     }
 
     pub fn render_list(&self) -> Text<'static> {
         let mut text = Text::styled(" ", Style::default());
-        let mut offsets = self.context.make_render_offsets();
-        for signal in &self.signals {
-            signal.render(&mut text, &mut offsets);
-        }
+        let mut offsets = self.tree_select.make_render_offsets();
+        self.tree.render(&mut text, &mut offsets, self.list_width);
         text
     }
 
@@ -138,27 +140,26 @@ impl WaveformState {
         Text::styled(" ", Style::default())
     }
 
-    fn get_expanded_line_count(&self) -> usize {
-        let mut line_count = 0;
-        for signal in &self.signals {
-            line_count += 1;
-            if signal.expanded {
-                line_count += signal.variable.get_bit_width();
-            }
-        }
-        line_count
-    }
+    fn modify_list(&mut self, action: ListAction) {
+        let mut select_offset = self.tree_select.get_select_offset();
+        let selected = self.tree.get_selected_mut(&mut select_offset);
 
-    fn toggle_expanded(&mut self) {
-        let mut select_offset = self.context.get_select_offset();
-        for signal in &mut self.signals {
-            if select_offset == 0 {
-                signal.expanded = !signal.expanded;
-                return;
-            }
-            select_offset -= 1;
-            if signal.expanded {
-                select_offset -= signal.variable.get_bit_width() as isize;
+        let selected = match selected {
+            Some(selected) => selected,
+            None => return,
+        };
+
+        // let variables = match selected.get_value() {
+        //     NodeValue::Variable(variable) => vec![variable.clone()],
+        //     NodeValue::Scope(_) => get_scope_variables(selected.get_nodes()),
+        // };
+
+        match action {
+            ListAction::Group => {}
+            ListAction::Delete => {}
+            ListAction::Expand => {
+                selected.set_expanded(!selected.is_expanded());
+                self.tree_select.scroll_relative(0);
             }
         }
     }

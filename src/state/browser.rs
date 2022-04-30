@@ -8,52 +8,90 @@ use crate::state::filter::*;
 use crate::state::tree::*;
 use crate::state::utils::*;
 
+enum NodeValue {
+    Scope(String),
+    Variable(VcdVariable),
+}
+
+impl std::fmt::Display for NodeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scope(name) => write!(f, "{}", name),
+            Self::Variable(variable) => write!(f, "{}", variable),
+        }
+    }
+}
+
+impl Default for NodeValue {
+    fn default() -> Self {
+        Self::Scope(String::new())
+    }
+}
+
 fn search_nodes<'a>(
-    nodes: &'a Vec<TreeNode<VcdVariable, ()>>,
+    nodes: &'a Vec<TreeNode<NodeValue>>,
     name: &String,
-) -> Option<&'a TreeNode<VcdVariable, ()>> {
+) -> Option<&'a TreeNode<NodeValue>> {
     for node in nodes {
-        if node.get_name() == name {
+        if &node.get_value().to_string() == name {
             return Some(node);
         }
     }
     None
 }
 
+fn get_scope_variables(node: &TreeNodes<NodeValue>) -> Vec<VcdVariable> {
+    let mut variables = Vec::new();
+    for sub_node in node.get_nodes() {
+        match sub_node.get_value() {
+            NodeValue::Scope(_) => {}
+            NodeValue::Variable(variable) => variables.push(variable.clone()),
+        }
+    }
+    variables
+}
+
 fn generate_new_tree(
-    old_tree: &Vec<TreeNode<VcdVariable, ()>>,
+    old_tree: &Vec<TreeNode<NodeValue>>,
     new_scopes: &Vec<VcdScope>,
-) -> TreeNodes<VcdVariable, ()> {
+) -> TreeNodes<NodeValue> {
     let mut generated_nodes = TreeNodes::new();
 
     for (i, new_scope) in new_scopes.into_iter().enumerate() {
         let empty_node = TreeNode::default();
-        let old_scope = if old_tree.len() > i && new_scope.get_name() == old_tree[i].get_name() {
-            // The scopes indices lined up from the new to the old
-            &old_tree[i]
-        } else if let Some(old_scope) = search_nodes(&old_tree, new_scope.get_name()) {
-            // The scope existed in the old scopes, different position
-            old_scope
-        } else {
-            // The scope did not exist in the old scopes
-            &empty_node
-        };
+        let old_scope =
+            if old_tree.len() > i && new_scope.get_name() == &old_tree[i].get_value().to_string() {
+                // The scopes indices lined up from the new to the old
+                &old_tree[i]
+            } else if let Some(old_scope) = search_nodes(&old_tree, new_scope.get_name()) {
+                // The scope existed in the old scopes, different position
+                old_scope
+            } else {
+                // The scope did not exist in the old scopes
+                &empty_node
+            };
 
         let mut variables = new_scope.get_variables().clone();
         variables.sort_by(|a, b| alphanumeric_sort::compare_str(a.get_name(), b.get_name()));
+        let mut scope_nodes =
+            generate_new_tree(old_scope.get_nodes(), &new_scopes[i].get_scopes()).into_nodes();
+
+        let mut nodes = Vec::new();
+        nodes.append(&mut scope_nodes);
+        for variable in variables {
+            nodes.push(TreeNode::new(NodeValue::Variable(variable)));
+        }
 
         generated_nodes.get_nodes_mut().push(TreeNode::new_from(
-            new_scope.get_name().clone(),
-            (),
+            NodeValue::Scope(new_scope.get_name().clone()),
             old_scope.is_expanded(),
-            generate_new_tree(old_scope.get_nodes(), &new_scopes[i].get_scopes()).into_nodes(),
-            variables,
+            TreeNodes::from(nodes),
         ));
     }
 
-    generated_nodes
-        .get_nodes_mut()
-        .sort_by(|a, b| alphanumeric_sort::compare_str(&a.get_name(), &b.get_name()));
+    generated_nodes.get_nodes_mut().sort_by(|a, b| {
+        alphanumeric_sort::compare_str(&a.get_value().to_string(), &b.get_value().to_string())
+    });
     generated_nodes
 }
 
@@ -72,8 +110,8 @@ pub enum BrowserRequest {
 
 pub struct BrowserState {
     width: usize,
-    context: SelectContext,
-    tree: TreeNodes<VcdVariable, ()>,
+    select: TreeSelect,
+    tree: TreeNodes<NodeValue>,
     filters: Vec<BrowserFilterSection>,
 }
 
@@ -81,7 +119,7 @@ impl BrowserState {
     pub fn new() -> Self {
         Self {
             width: 0,
-            context: SelectContext::new(),
+            select: TreeSelect::new(),
             tree: TreeNodes::new(),
             filters: Vec::new(),
         }
@@ -94,8 +132,8 @@ impl BrowserState {
     pub fn update_scopes(&mut self, new_scopes: &Vec<VcdScope>) {
         // Set new scopes and clear the selected item
         self.tree = generate_new_tree(&self.tree.get_nodes(), &new_scopes);
-        let line_count = self.rendered_len();
-        self.context.select_relative(0, line_count);
+        // let line_count = self.rendered_len();
+        self.select.select_relative(&self.tree, 0);
     }
 
     pub fn set_size(&mut self, size: &Rect, border_width: u16) {
@@ -106,16 +144,15 @@ impl BrowserState {
         };
         // Handle extra room above/below hierarchy in browser
         let margin = border_width as isize * 2 + 2;
-        self.context.set_height(size.height as isize - margin);
+        self.select.set_height(size.height as isize - margin);
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> BrowserRequest {
-        let line_count = self.rendered_len();
         match key {
-            KeyCode::Up => self.context.select_relative(-1, line_count),
-            KeyCode::Down => self.context.select_relative(1, line_count),
-            KeyCode::PageDown => self.context.select_relative(20, line_count),
-            KeyCode::PageUp => self.context.select_relative(-20, line_count),
+            KeyCode::Up => self.select.select_relative(&self.tree, -1),
+            KeyCode::Down => self.select.select_relative(&self.tree, 1),
+            KeyCode::PageDown => self.select.select_relative(&self.tree, 20),
+            KeyCode::PageUp => self.select.select_relative(&self.tree, -20),
             KeyCode::Enter => return self.modify(BrowserAction::Expand),
             KeyCode::Char('a') => return self.modify(BrowserAction::Append),
             KeyCode::Char('i') => return self.modify(BrowserAction::Insert),
@@ -125,50 +162,46 @@ impl BrowserState {
     }
 
     pub fn handle_mouse_click(&mut self, _: u16, y: u16) -> BrowserRequest {
-        let line_count = self.rendered_len();
-        if self.context.select_absolute(y as isize - 1, line_count) {
+        if self.select.select_absolute(&self.tree, y as isize - 1) {
             return self.modify(BrowserAction::Expand);
         }
         BrowserRequest::None
     }
 
     pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
-        let line_count = self.rendered_len();
-        self.context
-            .select_relative(if scroll_up { -5 } else { 5 }, line_count);
+        self.select
+            .select_relative(&self.tree, if scroll_up { -5 } else { 5 });
     }
 
     pub fn render(&self) -> Text<'static> {
         let mut text = Text::styled(" ", Style::default());
-        let mut offsets = self.context.make_render_offsets();
+        let mut offsets = self.select.make_render_offsets();
         self.tree.render(&mut text, &mut offsets, self.width);
         text
     }
 
-    fn rendered_len(&self) -> usize {
-        self.tree.rendered_len()
-    }
-
     fn modify(&mut self, action: BrowserAction) -> BrowserRequest {
-        let mut select_offset = self.context.get_select_offset();
+        let mut select_offset = self.select.get_select_offset();
         let selected = self.tree.get_selected_mut(&mut select_offset);
 
-        match selected {
-            TreeNodeSelected::Value(value) => match action {
-                BrowserAction::Append => BrowserRequest::Append(vec![value.clone()]),
-                BrowserAction::Insert => BrowserRequest::Insert(vec![value.clone()]),
-                BrowserAction::Expand => BrowserRequest::None,
-            },
-            TreeNodeSelected::Node(node) => match action {
-                BrowserAction::Append => BrowserRequest::Append(node.get_values().clone()),
-                BrowserAction::Insert => BrowserRequest::Insert(node.get_values().clone()),
-                BrowserAction::Expand => {
-                    node.set_expanded(!node.is_expanded());
-                    self.context.scroll_relative(0);
-                    BrowserRequest::None
-                }
-            },
-            TreeNodeSelected::None => BrowserRequest::None,
+        let selected = match selected {
+            Some(selected) => selected,
+            None => return BrowserRequest::None,
+        };
+
+        let variables = match selected.get_value() {
+            NodeValue::Variable(variable) => vec![variable.clone()],
+            NodeValue::Scope(_) => get_scope_variables(selected.get_nodes()),
+        };
+
+        match action {
+            BrowserAction::Append => BrowserRequest::Append(variables),
+            BrowserAction::Insert => BrowserRequest::Insert(variables),
+            BrowserAction::Expand => {
+                selected.set_expanded(!selected.is_expanded());
+                self.select.scroll_relative(0);
+                BrowserRequest::None
+            }
         }
     }
 }

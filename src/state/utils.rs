@@ -3,6 +3,8 @@ use tui::{
     text::Text,
 };
 
+use crate::state::tree::*;
+
 pub fn get_selected_style(selected: bool) -> Style {
     if selected {
         Style::default().fg(Color::Black).bg(Color::White)
@@ -21,13 +23,18 @@ pub fn clamp_signed(value: isize, min: isize, max: isize) -> isize {
     }
 }
 
-pub struct SelectContext {
+enum TreeCursor {
+    Single(isize),
+    Range(isize, isize),
+}
+
+pub struct TreeSelect {
     height: isize,
     scroll: isize,
     select: isize,
 }
 
-impl SelectContext {
+impl TreeSelect {
     pub fn new() -> Self {
         Self {
             height: 0,
@@ -36,8 +43,8 @@ impl SelectContext {
         }
     }
 
-    pub fn make_render_offsets(&self) -> RenderContext {
-        RenderContext {
+    pub fn make_render_offsets(&self) -> TreeRender {
+        TreeRender {
             render: self.height,
             scroll: self.scroll,
             select: self.select,
@@ -45,14 +52,18 @@ impl SelectContext {
         }
     }
 
-    pub fn select_relative(&mut self, delta: isize, limit: usize) {
-        self.select = clamp_signed(self.select as isize + delta, 0, limit as isize - 1);
+    pub fn select_relative<T>(&mut self, tree: &TreeNodes<T>, delta: isize) {
+        self.select = clamp_signed(
+            self.select as isize + delta,
+            0,
+            tree.rendered_len() as isize - 1,
+        );
         self.scroll_relative(0);
     }
 
-    pub fn select_absolute(&mut self, value: isize, limit: usize) -> bool {
+    pub fn select_absolute<T>(&mut self, tree: &TreeNodes<T>, value: isize) -> bool {
         let select_offset = value + self.scroll;
-        if 0 <= select_offset && select_offset < limit as isize {
+        if 0 <= select_offset && select_offset < tree.rendered_len() as isize {
             let already_selected = select_offset == self.select;
             self.select = select_offset;
             already_selected
@@ -87,14 +98,14 @@ impl SelectContext {
     }
 }
 
-pub struct RenderContext {
+pub struct TreeRender {
     render: isize,
     scroll: isize,
     select: isize,
     indent: isize,
 }
 
-impl RenderContext {
+impl TreeRender {
     pub fn render_line(&mut self, text: &mut Text<'static>, line: Text<'static>) {
         if self.scroll <= 0 && self.render > 0 {
             text.extend(line);
