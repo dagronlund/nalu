@@ -8,6 +8,7 @@ use crate::state::filter::*;
 use crate::state::tree::*;
 use crate::state::utils::*;
 
+#[derive(Clone)]
 enum NodeValue {
     Scope(String),
     Variable(VcdVariable),
@@ -82,11 +83,13 @@ fn generate_new_tree(
             nodes.push(TreeNode::new(NodeValue::Variable(variable)));
         }
 
-        generated_nodes.get_nodes_mut().push(TreeNode::new_from(
-            NodeValue::Scope(new_scope.get_name().clone()),
-            old_scope.is_expanded(),
-            TreeNodes::from(nodes),
-        ));
+        generated_nodes
+            .get_nodes_mut()
+            .push(TreeNode::from_existing(
+                NodeValue::Scope(new_scope.get_name().clone()),
+                old_scope.is_expanded(),
+                TreeNodes::from(nodes),
+            ));
     }
 
     generated_nodes.get_nodes_mut().sort_by(|a, b| {
@@ -103,8 +106,8 @@ enum BrowserAction {
 }
 
 pub enum BrowserRequest {
-    Append(Vec<VcdVariable>),
-    Insert(Vec<VcdVariable>),
+    Append(Vec<String>, Vec<VcdVariable>),
+    Insert(Vec<String>, Vec<VcdVariable>),
     None,
 }
 
@@ -176,27 +179,32 @@ impl BrowserState {
     pub fn render(&self) -> Text<'static> {
         let mut text = Text::styled(" ", Style::default());
         let mut offsets = self.select.make_render_offsets();
-        self.tree.render(&mut text, &mut offsets, self.width);
+        self.tree
+            .render(&mut text, &mut offsets, self.width, &|n| format!("{}", n));
         text
     }
 
     fn modify(&mut self, action: BrowserAction) -> BrowserRequest {
         let mut select_offset = self.select.get_select_offset();
-        let selected = self.tree.get_selected_mut(&mut select_offset);
 
-        let selected = match selected {
-            Some(selected) => selected,
+        let (path, selected) = match self.tree.get_selected_mut(&mut select_offset) {
+            Some((path, selected)) => (path, selected),
             None => return BrowserRequest::None,
         };
 
+        let mut path: Vec<String> = path.into_iter().map(|x| x.to_string()).collect();
+
         let variables = match selected.get_value() {
             NodeValue::Variable(variable) => vec![variable.clone()],
-            NodeValue::Scope(_) => get_scope_variables(selected.get_nodes()),
+            NodeValue::Scope(name) => {
+                path.push(name.clone());
+                get_scope_variables(selected.get_nodes())
+            }
         };
 
         match action {
-            BrowserAction::Append => BrowserRequest::Append(variables),
-            BrowserAction::Insert => BrowserRequest::Insert(variables),
+            BrowserAction::Append => BrowserRequest::Append(path, variables),
+            BrowserAction::Insert => BrowserRequest::Insert(path, variables),
             BrowserAction::Expand => {
                 selected.set_expanded(!selected.is_expanded());
                 self.select.scroll_relative(0);

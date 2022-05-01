@@ -21,35 +21,12 @@ impl<T> TreeNode<T> {
         }
     }
 
-    pub fn new_from(value: T, expanded: bool, nodes: TreeNodes<T>) -> Self {
+    pub fn from_existing(value: T, expanded: bool, nodes: TreeNodes<T>) -> Self {
         Self {
             value: value,
             expanded: expanded,
             nodes: nodes,
         }
-    }
-
-    pub fn get_selected_mut<'a>(
-        &'a mut self,
-        select_offset: &mut isize,
-    ) -> Option<&'a mut TreeNode<T>> {
-        match *select_offset {
-            0 => {
-                *select_offset -= 1;
-                return Some(self);
-            }
-            1.. => *select_offset -= 1,
-            _ => return None,
-        }
-        if self.expanded {
-            for node in self.nodes.get_nodes_mut() {
-                match node.get_selected_mut(select_offset) {
-                    Some(node) => return Some(node),
-                    None => {}
-                }
-            }
-        }
-        None
     }
 
     pub fn rendered_len(&self) -> usize {
@@ -89,9 +66,46 @@ impl<T> TreeNode<T> {
 
 impl<T> TreeNode<T>
 where
+    T: Clone,
+{
+    pub fn get_selected_mut(
+        &mut self,
+        select_offset: &mut isize,
+    ) -> Option<(Vec<T>, &mut TreeNode<T>)> {
+        match *select_offset {
+            0 => {
+                *select_offset -= 1;
+                return Some((Vec::new(), self));
+            }
+            1.. => *select_offset -= 1,
+            _ => return None,
+        }
+        if self.expanded {
+            match self.nodes.get_selected_mut(select_offset) {
+                Some((mut parents, node)) => {
+                    parents.insert(0, self.value.clone());
+                    return Some((parents, node));
+                }
+                None => {}
+            }
+        }
+        None
+    }
+}
+
+impl<T> TreeNode<T>
+where
     T: std::fmt::Display,
 {
-    pub fn render(&self, text: &mut Text<'static>, offsets: &mut TreeRender, line_width: usize) {
+    pub fn render<F>(
+        &self,
+        text: &mut Text<'static>,
+        offsets: &mut TreeRender,
+        line_width: usize,
+        f: &F,
+    ) where
+        F: Fn(&T) -> String,
+    {
         if !offsets.is_rendering() {
             return;
         }
@@ -106,14 +120,14 @@ where
             ""
         };
         let line = Text::styled(
-            format!("{}{}{}", indents, expander, self.value),
+            format!("{}{}{}", indents, expander, f(&self.value)),
             get_selected_style(offsets.is_selected()),
         );
         offsets.render_line(text, line);
         if self.expanded {
             offsets.do_indent();
             for node in self.nodes.get_nodes() {
-                node.render(text, offsets, line_width);
+                node.render(text, offsets, line_width, f);
             }
             offsets.undo_indent();
         }
@@ -136,19 +150,6 @@ where
 impl<T> TreeNodes<T> {
     pub fn new() -> Self {
         Self { nodes: Vec::new() }
-    }
-
-    pub fn get_selected_mut<'a>(
-        &'a mut self,
-        select_offset: &mut isize,
-    ) -> Option<&'a mut TreeNode<T>> {
-        for node in &mut self.nodes {
-            match node.get_selected_mut(select_offset) {
-                Some(node) => return Some(node),
-                None => {}
-            }
-        }
-        None
     }
 
     pub fn rendered_len(&self) -> usize {
@@ -174,11 +175,37 @@ impl<T> TreeNodes<T> {
 
 impl<T> TreeNodes<T>
 where
+    T: Clone,
+{
+    pub fn get_selected_mut(
+        &mut self,
+        select_offset: &mut isize,
+    ) -> Option<(Vec<T>, &mut TreeNode<T>)> {
+        for node in &mut self.nodes {
+            match node.get_selected_mut(select_offset) {
+                Some((parents, node)) => return Some((parents, node)),
+                None => {}
+            }
+        }
+        None
+    }
+}
+
+impl<T> TreeNodes<T>
+where
     T: std::fmt::Display,
 {
-    pub fn render(&self, text: &mut Text<'static>, offsets: &mut TreeRender, line_width: usize) {
+    pub fn render<F>(
+        &self,
+        text: &mut Text<'static>,
+        offsets: &mut TreeRender,
+        line_width: usize,
+        f: &F,
+    ) where
+        F: Fn(&T) -> String,
+    {
         for node in &self.nodes {
-            node.render(text, offsets, line_width);
+            node.render(text, offsets, line_width, f);
         }
     }
 }

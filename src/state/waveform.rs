@@ -8,11 +8,12 @@ use crate::state::browser::BrowserRequest;
 use crate::state::tree::*;
 use crate::state::utils::*;
 
+#[derive(Clone)]
 enum WaveformNode {
     Spacer,
     Group(String),
-    VectorSignal(VcdVariable),
-    VectorComponentSignal(VcdVariable, usize),
+    VectorSignal(Vec<String>, VcdVariable),
+    VectorSignalComponent(Vec<String>, VcdVariable, usize),
 }
 
 impl std::fmt::Display for WaveformNode {
@@ -20,8 +21,10 @@ impl std::fmt::Display for WaveformNode {
         match self {
             Self::Spacer => write!(f, ""),
             Self::Group(name) => write!(f, "{}", name),
-            Self::VectorSignal(variable) => write!(f, "{}", variable),
-            Self::VectorComponentSignal(variable, index) => write!(f, "{} [{}]", variable, index),
+            Self::VectorSignal(_, variable) => write!(f, "{}", variable),
+            Self::VectorSignalComponent(_, variable, index) => {
+                write!(f, "{} [{}]", variable, index)
+            }
         }
     }
 }
@@ -32,12 +35,30 @@ impl Default for WaveformNode {
     }
 }
 
-fn create_variable_node(variable: VcdVariable) -> TreeNode<WaveformNode> {
-    let mut variable_node = TreeNode::new(WaveformNode::VectorSignal(variable.clone()));
+impl WaveformNode {
+    fn print_path(&self) -> String {
+        let mut s = String::new();
+        match self {
+            Self::Spacer | Self::Group(_) => {}
+            Self::VectorSignal(paths, _) | Self::VectorSignalComponent(paths, _, _) => {
+                for path in paths {
+                    s.push_str(&path);
+                    s.push('.');
+                }
+            }
+        }
+        s
+    }
+}
+
+fn create_variable_node(path: Vec<String>, variable: VcdVariable) -> TreeNode<WaveformNode> {
+    let mut variable_node =
+        TreeNode::new(WaveformNode::VectorSignal(path.clone(), variable.clone()));
     for i in 0..variable.get_bit_width() {
         variable_node
             .get_nodes_mut()
-            .push(TreeNode::new(WaveformNode::VectorComponentSignal(
+            .push(TreeNode::new(WaveformNode::VectorSignalComponent(
+                path.clone(),
                 variable.clone(),
                 i,
             )));
@@ -57,6 +78,7 @@ pub struct WaveformState {
     viewer_width: usize,
     tree_select: TreeSelect,
     tree: TreeNodes<WaveformNode>,
+    full_path: bool,
 }
 
 impl WaveformState {
@@ -66,17 +88,18 @@ impl WaveformState {
             viewer_width: 0,
             tree_select: TreeSelect::new(),
             tree: TreeNodes::new(),
+            full_path: false,
         }
     }
 
     pub fn browser_request(&mut self, request: BrowserRequest) {
         match request {
-            BrowserRequest::Append(variables) => {
+            BrowserRequest::Append(path, variables) => {
                 for variable in variables {
-                    self.tree.push(create_variable_node(variable));
+                    self.tree.push(create_variable_node(path.clone(), variable));
                 }
             }
-            BrowserRequest::Insert(_) => {
+            BrowserRequest::Insert(_, _) => {
                 let mut select_offset = self.tree_select.get_select_offset();
                 let selected = self.tree.get_selected_mut(&mut select_offset);
                 let selected = match selected {
@@ -113,6 +136,7 @@ impl WaveformState {
             KeyCode::PageUp => self.tree_select.select_relative(&self.tree, -20),
             KeyCode::Enter => self.modify_list(ListAction::Expand),
             KeyCode::Char('g') => self.modify_list(ListAction::Group),
+            KeyCode::Char('f') => self.full_path = !self.full_path,
             KeyCode::Delete => self.modify_list(ListAction::Delete),
             _ => {}
         }
@@ -132,7 +156,14 @@ impl WaveformState {
     pub fn render_list(&self) -> Text<'static> {
         let mut text = Text::styled(" ", Style::default());
         let mut offsets = self.tree_select.make_render_offsets();
-        self.tree.render(&mut text, &mut offsets, self.list_width);
+        self.tree
+            .render(&mut text, &mut offsets, self.list_width, &|n| {
+                if self.full_path {
+                    format!("{}{}", n.print_path(), n)
+                } else {
+                    format!("{}", n)
+                }
+            });
         text
     }
 
@@ -142,10 +173,9 @@ impl WaveformState {
 
     fn modify_list(&mut self, action: ListAction) {
         let mut select_offset = self.tree_select.get_select_offset();
-        let selected = self.tree.get_selected_mut(&mut select_offset);
 
-        let selected = match selected {
-            Some(selected) => selected,
+        let selected = match self.tree.get_selected_mut(&mut select_offset) {
+            Some((_, selected)) => selected,
             None => return,
         };
 
