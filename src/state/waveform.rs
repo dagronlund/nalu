@@ -1,4 +1,4 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use tui::{layout::Rect, style::Style, text::Text};
 
@@ -76,7 +76,7 @@ enum ListAction {
 pub struct WaveformState {
     list_width: usize,
     viewer_width: usize,
-    tree_select: TreeSelect,
+    tree_select: TreeDisplay,
     tree: TreeNodes<WaveformNode>,
     full_path: bool,
 }
@@ -86,28 +86,29 @@ impl WaveformState {
         Self {
             list_width: 0,
             viewer_width: 0,
-            tree_select: TreeSelect::new(),
+            tree_select: TreeDisplay::new(),
             tree: TreeNodes::new(),
             full_path: false,
         }
     }
 
-    pub fn browser_request(&mut self, request: BrowserRequest) {
-        match request {
-            BrowserRequest::Append(path, variables) => {
-                for variable in variables {
-                    self.tree.push(create_variable_node(path.clone(), variable));
+    pub fn browser_request(&mut self, requests: Vec<BrowserRequest>) {
+        for request in requests {
+            match request {
+                BrowserRequest::Append(path, variables) => {
+                    for variable in variables {
+                        self.tree.push(create_variable_node(path.clone(), variable));
+                    }
+                }
+                BrowserRequest::Insert(_, _) => {
+                    let mut select_offset = self.tree_select.get_primary_selected();
+                    let selected = self.tree.get_selected_mut(&mut select_offset);
+                    let selected = match selected {
+                        Some(selected) => selected,
+                        None => return,
+                    };
                 }
             }
-            BrowserRequest::Insert(_, _) => {
-                let mut select_offset = self.tree_select.get_select_offset();
-                let selected = self.tree.get_selected_mut(&mut select_offset);
-                let selected = match selected {
-                    Some(selected) => selected,
-                    None => return,
-                };
-            }
-            BrowserRequest::None => {}
         }
     }
 
@@ -128,12 +129,13 @@ impl WaveformState {
             .set_height(list_size.height as isize - margin);
     }
 
-    pub fn handle_key_list(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::Up => self.tree_select.select_relative(&self.tree, -1),
-            KeyCode::Down => self.tree_select.select_relative(&self.tree, 1),
-            KeyCode::PageDown => self.tree_select.select_relative(&self.tree, 20),
-            KeyCode::PageUp => self.tree_select.select_relative(&self.tree, -20),
+    pub fn handle_key_list(&mut self, event: KeyEvent) {
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        match event.code {
+            KeyCode::Up => self.tree_select.select_relative(&self.tree, -1, !shift),
+            KeyCode::Down => self.tree_select.select_relative(&self.tree, 1, !shift),
+            KeyCode::PageDown => self.tree_select.select_relative(&self.tree, 20, !shift),
+            KeyCode::PageUp => self.tree_select.select_relative(&self.tree, -20, !shift),
             KeyCode::Enter => self.modify_list(ListAction::Expand),
             KeyCode::Char('g') => self.modify_list(ListAction::Group),
             KeyCode::Char('f') => self.full_path = !self.full_path,
@@ -143,14 +145,17 @@ impl WaveformState {
     }
 
     pub fn handle_mouse_click_list(&mut self, _: u16, y: u16) {
-        if self.tree_select.select_absolute(&self.tree, y as isize - 1) {
+        if self
+            .tree_select
+            .select_absolute(&self.tree, y as isize - 1, true)
+        {
             self.modify_list(ListAction::Expand);
         }
     }
 
     pub fn handle_mouse_scroll_list(&mut self, scroll_up: bool) {
         self.tree_select
-            .select_relative(&self.tree, if scroll_up { -5 } else { 5 });
+            .select_relative(&self.tree, if scroll_up { -5 } else { 5 }, true);
     }
 
     pub fn render_list(&self) -> Text<'static> {
@@ -172,7 +177,7 @@ impl WaveformState {
     }
 
     fn modify_list(&mut self, action: ListAction) {
-        let mut select_offset = self.tree_select.get_select_offset();
+        let mut select_offset = self.tree_select.get_primary_selected();
 
         let selected = match self.tree.get_selected_mut(&mut select_offset) {
             Some((_, selected)) => selected,
@@ -189,7 +194,7 @@ impl WaveformState {
             ListAction::Delete => {}
             ListAction::Expand => {
                 selected.set_expanded(!selected.is_expanded());
-                self.tree_select.scroll_relative(0);
+                self.tree_select.scroll_relative(0, select_offset);
             }
         }
     }

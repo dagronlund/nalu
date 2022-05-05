@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use vcd_parser::parser::VcdHeader;
 use vcd_parser::waveform::Waveform;
 
-use crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::layout::Rect;
 
 use crate::resize::LayoutResize;
@@ -220,18 +220,18 @@ impl NaluState {
         }
     }
 
-    fn handle_key_browser(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key_browser(&mut self, event: KeyEvent) {
+        match event.code.clone() {
             KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
-            key => {
-                let request = self.browser_state.handle_key(key);
-                self.waveform_state.browser_request(request);
+            _ => {
+                let requests = self.browser_state.handle_key(event);
+                self.waveform_state.browser_request(requests);
             }
         }
     }
 
-    fn handle_key_filter(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key_filter(&mut self, event: KeyEvent) {
+        match event.code.clone() {
             KeyCode::Esc => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
             key => {
                 edit_string(key, &mut self.filter_input);
@@ -240,15 +240,15 @@ impl NaluState {
         }
     }
 
-    fn handle_key_list(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key_list(&mut self, event: KeyEvent) {
+        match event.code.clone() {
             KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
-            key => self.waveform_state.handle_key_list(key),
+            _ => self.waveform_state.handle_key_list(event),
         }
     }
 
-    fn handle_key_viewer(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key_viewer(&mut self, event: KeyEvent) {
+        match event.code.clone() {
             KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
             _ => {
                 // TODO: Handle passing key event to component
@@ -256,13 +256,13 @@ impl NaluState {
         }
     }
 
-    fn handle_key_non_overlay(&mut self, key: KeyCode) {
+    fn handle_key_non_overlay(&mut self, event: KeyEvent) {
         match &self.focus {
             NaluFocus::Browser(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_browser(key);
+                    self.handle_key_browser(event);
                 } else {
-                    match key {
+                    match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Browser(NaluFocusType::Full),
                         KeyCode::Esc => self.overlay = NaluOverlay::QuitPrompt,
                         KeyCode::Down => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
@@ -273,9 +273,9 @@ impl NaluState {
             }
             NaluFocus::Filter(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_filter(key);
+                    self.handle_key_filter(event);
                 } else {
-                    match key {
+                    match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Filter(NaluFocusType::Full),
                         KeyCode::Esc => self.overlay = NaluOverlay::QuitPrompt,
                         KeyCode::Up => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
@@ -286,9 +286,9 @@ impl NaluState {
             }
             NaluFocus::List(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_list(key);
+                    self.handle_key_list(event);
                 } else {
-                    match key {
+                    match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::List(NaluFocusType::Full),
                         KeyCode::Esc => self.overlay = NaluOverlay::QuitPrompt,
                         KeyCode::Left => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
@@ -299,9 +299,9 @@ impl NaluState {
             }
             NaluFocus::Viewer(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_viewer(key);
+                    self.handle_key_viewer(event);
                 } else {
-                    match key {
+                    match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Viewer(NaluFocusType::Full),
                         KeyCode::Esc => self.overlay = NaluOverlay::QuitPrompt,
                         KeyCode::Left => self.focus = NaluFocus::List(NaluFocusType::Partial),
@@ -309,7 +309,7 @@ impl NaluState {
                     }
                 }
             }
-            NaluFocus::None => match key {
+            NaluFocus::None => match event.code {
                 KeyCode::Enter | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
                     self.focus = NaluFocus::Browser(NaluFocusType::Partial)
                 }
@@ -319,27 +319,28 @@ impl NaluState {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyCode) {
+    pub fn handle_key(&mut self, event: KeyEvent) {
+        let key_code = event.code.clone();
         match self.overlay {
-            NaluOverlay::Loading => match key {
+            NaluOverlay::Loading => match key_code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 _ => {}
             },
-            NaluOverlay::Palette => match key {
+            NaluOverlay::Palette => match key_code {
                 KeyCode::Esc => self.overlay = NaluOverlay::None,
                 key => edit_string(key, &mut self.palette_input),
             },
-            NaluOverlay::HelpPrompt => match key {
+            NaluOverlay::HelpPrompt => match key_code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Esc => self.overlay = NaluOverlay::None,
                 _ => {}
             },
-            NaluOverlay::QuitPrompt => match key {
+            NaluOverlay::QuitPrompt => match key_code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Esc => self.overlay = NaluOverlay::None,
                 _ => {}
             },
-            NaluOverlay::None => match key {
+            NaluOverlay::None => match key_code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Char('h') => self.overlay = NaluOverlay::HelpPrompt,
                 KeyCode::Char('p') => self.overlay = NaluOverlay::Palette,
@@ -347,7 +348,7 @@ impl NaluState {
                     self.overlay = NaluOverlay::Loading;
                     self.handle_reload();
                 }
-                key => self.handle_key_non_overlay(key),
+                _ => self.handle_key_non_overlay(event),
             },
         }
     }

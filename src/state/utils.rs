@@ -5,9 +5,15 @@ use tui::{
 
 use crate::state::tree::*;
 
-pub fn get_selected_style(selected: bool) -> Style {
-    if selected {
-        Style::default().fg(Color::Black).bg(Color::White)
+pub fn get_selected_style(is_selected: bool, is_primary: bool) -> Style {
+    if is_selected {
+        if is_primary {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Rgb(128, 128, 128))
+        }
     } else {
         Style::default()
     }
@@ -23,23 +29,62 @@ pub fn clamp_signed(value: isize, min: isize, max: isize) -> isize {
     }
 }
 
-enum TreeCursor {
-    Single(isize),
-    Range(isize, isize),
+#[derive(Clone)]
+struct TreeCursor {
+    primary: isize,
+    secondary: Option<isize>,
 }
 
-pub struct TreeSelect {
+impl TreeCursor {
+    fn get_primary(&self) -> isize {
+        self.primary
+    }
+
+    fn get_selected(&self) -> core::ops::Range<isize> {
+        if let Some(secondary) = self.secondary {
+            if self.primary < secondary {
+                self.primary..secondary + 1
+            } else {
+                secondary..self.primary + 1
+            }
+        } else {
+            self.primary..self.primary + 1
+        }
+    }
+
+    fn is_primary_selected(&self) -> bool {
+        self.primary == 0
+    }
+
+    fn is_selected(&self) -> bool {
+        self.get_selected().contains(&0)
+    }
+
+    fn add(&mut self, value: isize) {
+        self.primary += value;
+        self.secondary = if let Some(secondary) = self.secondary {
+            Some(secondary + value)
+        } else {
+            None
+        };
+    }
+}
+
+pub struct TreeDisplay {
     height: isize,
     scroll: isize,
-    select: isize,
+    cursor: TreeCursor,
 }
 
-impl TreeSelect {
+impl TreeDisplay {
     pub fn new() -> Self {
         Self {
             height: 0,
             scroll: 0,
-            select: 0,
+            cursor: TreeCursor {
+                primary: 0,
+                secondary: None,
+            },
         }
     }
 
@@ -47,61 +92,91 @@ impl TreeSelect {
         TreeRender {
             render: self.height,
             scroll: self.scroll,
-            select: self.select,
+            cursor: self.cursor.clone(),
             indent: 0,
         }
     }
 
-    pub fn select_relative<T>(&mut self, tree: &TreeNodes<T>, delta: isize) {
-        self.select = clamp_signed(
-            self.select as isize + delta,
-            0,
-            tree.rendered_len() as isize - 1,
-        );
-        self.scroll_relative(0);
+    pub fn select_relative<T>(&mut self, tree: &TreeNodes<T>, delta: isize, is_primary: bool) {
+        if is_primary {
+            self.cursor.secondary = None;
+            self.cursor.primary = clamp_signed(
+                self.cursor.primary + delta,
+                0,
+                tree.rendered_len() as isize - 1,
+            );
+            self.scroll_relative(0, self.cursor.primary);
+        } else {
+            let secondary = if let Some(secondary) = self.cursor.secondary {
+                secondary
+            } else {
+                self.cursor.get_primary()
+            };
+            let secondary = clamp_signed(secondary + delta, 0, tree.rendered_len() as isize - 1);
+            self.cursor.secondary = Some(secondary);
+            self.scroll_relative(0, secondary);
+        }
     }
 
-    pub fn select_absolute<T>(&mut self, tree: &TreeNodes<T>, value: isize) -> bool {
+    pub fn select_absolute<T>(
+        &mut self,
+        tree: &TreeNodes<T>,
+        value: isize,
+        is_primary: bool,
+    ) -> bool {
         let select_offset = value + self.scroll;
-        if 0 <= select_offset && select_offset < tree.rendered_len() as isize {
-            let already_selected = select_offset == self.select;
-            self.select = select_offset;
-            already_selected
+        if is_primary {
+            self.cursor.secondary = None;
+            if (0..tree.rendered_len() as isize).contains(&select_offset) {
+                let already_selected = select_offset == self.cursor.primary;
+                self.cursor.primary = select_offset;
+                already_selected
+            } else {
+                false
+            }
         } else {
+            self.cursor.secondary = Some(select_offset);
             false
         }
     }
 
-    pub fn scroll_relative(&mut self, delta: isize) {
+    pub fn scroll_relative(&mut self, delta: isize, cursor: isize) {
         self.scroll = clamp_signed(
             self.scroll as isize + delta,
-            if self.select > self.height - 1 {
-                self.select - self.height + 1
+            if cursor > self.height - 1 {
+                cursor - self.height + 1
             } else {
                 0
             },
-            self.select,
+            cursor,
         );
     }
 
     pub fn set_height(&mut self, height: isize) {
+        let changed = self.height != height;
         if height > 0 {
             self.height = height;
         } else {
             self.height = 0;
         }
-        self.scroll_relative(0);
+        if changed {
+            self.scroll_relative(0, self.cursor.get_primary());
+        }
     }
 
-    pub fn get_select_offset(&self) -> isize {
-        self.select
+    pub fn get_primary_selected(&self) -> isize {
+        self.cursor.get_primary()
+    }
+
+    pub fn get_selected(&self) -> core::ops::Range<isize> {
+        self.cursor.get_selected()
     }
 }
 
 pub struct TreeRender {
     render: isize,
     scroll: isize,
-    select: isize,
+    cursor: TreeCursor,
     indent: isize,
 }
 
@@ -113,7 +188,7 @@ impl TreeRender {
         } else {
             self.scroll -= 1;
         }
-        self.select -= 1;
+        self.cursor.add(-1);
     }
 
     pub fn do_indent(&mut self) {
@@ -132,7 +207,11 @@ impl TreeRender {
         self.render > 0
     }
 
+    pub fn is_primary_selected(&self) -> bool {
+        self.cursor.is_primary_selected()
+    }
+
     pub fn is_selected(&self) -> bool {
-        self.select == 0
+        self.cursor.is_selected()
     }
 }

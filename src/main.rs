@@ -262,7 +262,7 @@ fn main() -> Result<()> {
 
         while !rx_input.is_empty() {
             match rx_input.recv().unwrap() {
-                CrosstermEvent::Key(key) => nalu_state.handle_key(key.code),
+                CrosstermEvent::Key(key) => nalu_state.handle_key(key),
                 CrosstermEvent::Mouse(event) => nalu_state.handle_mouse(
                     event.column,
                     event.row,

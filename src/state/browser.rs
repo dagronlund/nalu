@@ -1,6 +1,6 @@
 use vcd_parser::parser::*;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use tui::{layout::Rect, style::Style, text::Text};
 
@@ -108,12 +108,11 @@ enum BrowserAction {
 pub enum BrowserRequest {
     Append(Vec<String>, Vec<VcdVariable>),
     Insert(Vec<String>, Vec<VcdVariable>),
-    None,
 }
 
 pub struct BrowserState {
     width: usize,
-    select: TreeSelect,
+    select: TreeDisplay,
     tree: TreeNodes<NodeValue>,
     filters: Vec<BrowserFilterSection>,
 }
@@ -122,7 +121,7 @@ impl BrowserState {
     pub fn new() -> Self {
         Self {
             width: 0,
-            select: TreeSelect::new(),
+            select: TreeDisplay::new(),
             tree: TreeNodes::new(),
             filters: Vec::new(),
         }
@@ -136,7 +135,7 @@ impl BrowserState {
         // Set new scopes and clear the selected item
         self.tree = generate_new_tree(&self.tree.get_nodes(), &new_scopes);
         // let line_count = self.rendered_len();
-        self.select.select_relative(&self.tree, 0);
+        self.select.select_relative(&self.tree, 0, true);
     }
 
     pub fn set_size(&mut self, size: &Rect, border_width: u16) {
@@ -150,30 +149,34 @@ impl BrowserState {
         self.select.set_height(size.height as isize - margin);
     }
 
-    pub fn handle_key(&mut self, key: KeyCode) -> BrowserRequest {
-        match key {
-            KeyCode::Up => self.select.select_relative(&self.tree, -1),
-            KeyCode::Down => self.select.select_relative(&self.tree, 1),
-            KeyCode::PageDown => self.select.select_relative(&self.tree, 20),
-            KeyCode::PageUp => self.select.select_relative(&self.tree, -20),
+    pub fn handle_key(&mut self, event: KeyEvent) -> Vec<BrowserRequest> {
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        match event.code {
+            KeyCode::Up => self.select.select_relative(&self.tree, -1, !shift),
+            KeyCode::Down => self.select.select_relative(&self.tree, 1, !shift),
+            KeyCode::PageDown => self.select.select_relative(&self.tree, 20, !shift),
+            KeyCode::PageUp => self.select.select_relative(&self.tree, -20, !shift),
             KeyCode::Enter => return self.modify(BrowserAction::Expand),
             KeyCode::Char('a') => return self.modify(BrowserAction::Append),
             KeyCode::Char('i') => return self.modify(BrowserAction::Insert),
             _ => {}
         }
-        BrowserRequest::None
+        Vec::new()
     }
 
-    pub fn handle_mouse_click(&mut self, _: u16, y: u16) -> BrowserRequest {
-        if self.select.select_absolute(&self.tree, y as isize - 1) {
+    pub fn handle_mouse_click(&mut self, _: u16, y: u16) -> Vec<BrowserRequest> {
+        if self
+            .select
+            .select_absolute(&self.tree, y as isize - 1, true)
+        {
             return self.modify(BrowserAction::Expand);
         }
-        BrowserRequest::None
+        Vec::new()
     }
 
     pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
         self.select
-            .select_relative(&self.tree, if scroll_up { -5 } else { 5 });
+            .select_relative(&self.tree, if scroll_up { -5 } else { 5 }, true);
     }
 
     pub fn render(&self) -> Text<'static> {
@@ -184,32 +187,33 @@ impl BrowserState {
         text
     }
 
-    fn modify(&mut self, action: BrowserAction) -> BrowserRequest {
-        let mut select_offset = self.select.get_select_offset();
-
-        let (path, selected) = match self.tree.get_selected_mut(&mut select_offset) {
-            Some((path, selected)) => (path, selected),
-            None => return BrowserRequest::None,
-        };
-
-        let mut path: Vec<String> = path.into_iter().map(|x| x.to_string()).collect();
-
-        let variables = match selected.get_value() {
-            NodeValue::Variable(variable) => vec![variable.clone()],
-            NodeValue::Scope(name) => {
-                path.push(name.clone());
-                get_scope_variables(selected.get_nodes())
-            }
-        };
-
-        match action {
-            BrowserAction::Append => BrowserRequest::Append(path, variables),
-            BrowserAction::Insert => BrowserRequest::Insert(path, variables),
-            BrowserAction::Expand => {
-                selected.set_expanded(!selected.is_expanded());
-                self.select.scroll_relative(0);
-                BrowserRequest::None
+    fn modify(&mut self, action: BrowserAction) -> Vec<BrowserRequest> {
+        let mut requests = Vec::new();
+        for mut select_offset in self.select.get_selected() {
+            let (path, selected) = match self.tree.get_selected_mut(&mut select_offset) {
+                Some((path, selected)) => (path, selected),
+                None => continue,
+            };
+            let mut path: Vec<String> = path.into_iter().map(|x| x.to_string()).collect();
+            let variables = match selected.get_value() {
+                NodeValue::Variable(variable) => vec![variable.clone()],
+                NodeValue::Scope(name) => {
+                    path.push(name.clone());
+                    get_scope_variables(selected.get_nodes())
+                }
+            };
+            match action {
+                BrowserAction::Append => requests.push(BrowserRequest::Append(path, variables)),
+                BrowserAction::Insert => requests.push(BrowserRequest::Insert(path, variables)),
+                BrowserAction::Expand => {
+                    selected.set_expanded(!selected.is_expanded());
+                    self.select
+                        .scroll_relative(0, self.select.get_primary_selected());
+                }
             }
         }
+        // let mut select_offset = self.select.get_primary_selected();
+
+        requests
     }
 }

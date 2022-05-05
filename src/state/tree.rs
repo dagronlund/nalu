@@ -93,10 +93,7 @@ where
     }
 }
 
-impl<T> TreeNode<T>
-where
-    T: std::fmt::Display,
-{
+impl<T> TreeNode<T> {
     pub fn render<F>(
         &self,
         text: &mut Text<'static>,
@@ -119,9 +116,15 @@ where
         } else {
             ""
         };
+        let line = format!("{}{}{}", indents, expander, f(&self.value));
+        let padding = if line.len() < line_width {
+            String::from(" ").repeat(line_width - line.len())
+        } else {
+            String::new()
+        };
         let line = Text::styled(
-            format!("{}{}{}", indents, expander, f(&self.value)),
-            get_selected_style(offsets.is_selected()),
+            format!("{}{}", line, padding),
+            get_selected_style(offsets.is_selected(), offsets.is_primary_selected()),
         );
         offsets.render_line(text, line);
         if self.expanded {
@@ -191,10 +194,7 @@ where
     }
 }
 
-impl<T> TreeNodes<T>
-where
-    T: std::fmt::Display,
-{
+impl<T> TreeNodes<T> {
     pub fn render<F>(
         &self,
         text: &mut Text<'static>,
