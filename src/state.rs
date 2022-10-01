@@ -92,7 +92,6 @@ pub struct NaluState {
     resizing: LayoutResize<3>,
     progress: Arc<Mutex<(usize, usize)>>,
     vcd_header: VcdHeader,
-    waveform: Waveform,
     filter_input: String,
     palette_input: String,
     done: Option<String>,
@@ -113,7 +112,6 @@ impl NaluState {
             resizing: LayoutResize::new([1, 1, 2], 2),
             progress: progress,
             vcd_header: VcdHeader::new(),
-            waveform: Waveform::new(),
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
@@ -220,47 +218,17 @@ impl NaluState {
         }
     }
 
-    fn handle_key_browser(&mut self, event: KeyEvent) {
-        match event.code.clone() {
-            KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
-            _ => {
-                let requests = self.browser_state.handle_key(event);
-                self.waveform_state.browser_request(requests);
-            }
-        }
-    }
-
-    fn handle_key_filter(&mut self, event: KeyEvent) {
-        match event.code.clone() {
-            KeyCode::Esc => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
-            key => {
-                edit_string(key, &mut self.filter_input);
-                self.browser_state.update_filter(self.filter_input.clone());
-            }
-        }
-    }
-
-    fn handle_key_list(&mut self, event: KeyEvent) {
-        match event.code.clone() {
-            KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
-            _ => self.waveform_state.handle_key_list(event),
-        }
-    }
-
-    fn handle_key_viewer(&mut self, event: KeyEvent) {
-        match event.code.clone() {
-            KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
-            _ => {
-                // TODO: Handle passing key event to component
-            }
-        }
-    }
-
     fn handle_key_non_overlay(&mut self, event: KeyEvent) {
         match &self.focus {
             NaluFocus::Browser(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_browser(event);
+                    match event.code.clone() {
+                        KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
+                        _ => {
+                            let requests = self.browser_state.handle_key(event);
+                            self.waveform_state.browser_request(requests);
+                        }
+                    }
                 } else {
                     match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Browser(NaluFocusType::Full),
@@ -273,7 +241,13 @@ impl NaluState {
             }
             NaluFocus::Filter(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_filter(event);
+                    match event.code.clone() {
+                        KeyCode::Esc => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
+                        key => {
+                            edit_string(key, &mut self.filter_input);
+                            self.browser_state.update_filter(self.filter_input.clone());
+                        }
+                    }
                 } else {
                     match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Filter(NaluFocusType::Full),
@@ -286,7 +260,10 @@ impl NaluState {
             }
             NaluFocus::List(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_list(event);
+                    match event.code.clone() {
+                        KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
+                        _ => self.waveform_state.handle_key_list(event),
+                    }
                 } else {
                     match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::List(NaluFocusType::Full),
@@ -299,7 +276,10 @@ impl NaluState {
             }
             NaluFocus::Viewer(focus_type) => {
                 if let NaluFocusType::Full = focus_type {
-                    self.handle_key_viewer(event);
+                    match event.code.clone() {
+                        KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
+                        _ => self.waveform_state.handle_key_viewer(event),
+                    }
                 } else {
                     match event.code {
                         KeyCode::Enter => self.focus = NaluFocus::Viewer(NaluFocusType::Full),
@@ -375,9 +355,16 @@ impl NaluState {
             Ok((vcd_header, waveform)) => {
                 self.overlay = NaluOverlay::None;
                 self.vcd_header = vcd_header;
-                self.waveform = waveform;
                 self.browser_state
                     .update_scopes(&self.vcd_header.get_scopes());
+                let timescale = self.vcd_header.get_timescale();
+                self.waveform_state.load_waveform(
+                    waveform,
+                    match timescale {
+                        Some(timescale) => *timescale,
+                        None => 0,
+                    },
+                );
             }
             Err(err) => {
                 self.done = Some(format!("VCD Loading Error: {:?}", err));

@@ -1,6 +1,8 @@
+mod component;
 mod resize;
 mod state;
 mod vcd;
+mod view;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;

@@ -1,12 +1,23 @@
+mod signal;
+mod timescale;
+
+use core::ops::Range;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use tui::{layout::Rect, style::Style, text::Text};
+use tui::{
+    layout::Rect,
+    style::Style,
+    text::{Span, Spans, Text},
+};
 
 use vcd_parser::parser::*;
+use vcd_parser::waveform::Waveform;
 
 use crate::state::browser::BrowserRequest;
 use crate::state::tree::*;
 use crate::state::utils::*;
+use crate::state::waveform::timescale::*;
 
 #[derive(Clone)]
 enum WaveformNode {
@@ -79,6 +90,8 @@ pub struct WaveformState {
     tree_select: TreeDisplay,
     tree: TreeNodes<WaveformNode>,
     full_path: bool,
+    waveform: Waveform,
+    time: WaveformTime,
 }
 
 impl WaveformState {
@@ -89,7 +102,21 @@ impl WaveformState {
             tree_select: TreeDisplay::new(),
             tree: TreeNodes::new(),
             full_path: false,
+            waveform: Waveform::new(),
+            time: WaveformTime::new(),
         }
+    }
+
+    pub fn load_waveform(&mut self, waveform: Waveform, timescale: i32) {
+        self.waveform = waveform;
+        let (min, max) = match (
+            self.waveform.get_timestamps().first(),
+            self.waveform.get_timestamps().last(),
+        ) {
+            (Some(start), Some(end)) => (*start, *end),
+            _ => (0, 0),
+        };
+        self.time.load_waveform(min..max, max, timescale);
     }
 
     pub fn browser_request(&mut self, requests: Vec<BrowserRequest>) {
@@ -144,6 +171,30 @@ impl WaveformState {
         }
     }
 
+    pub fn handle_key_viewer(&mut self, event: KeyEvent) {
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        match event.code {
+            KeyCode::Char('-') => self.time.zoom_out(false),
+            KeyCode::Char('=') => self.time.zoom_in(false),
+            KeyCode::Char('[') => self.time.zoom_left(false),
+            KeyCode::Char(']') => self.time.zoom_right(false),
+            KeyCode::Char('_') => self.time.zoom_out(true),
+            KeyCode::Char('+') => self.time.zoom_in(true),
+            KeyCode::Char('{') => self.time.zoom_left(true),
+            KeyCode::Char('}') => self.time.zoom_right(true),
+            // KeyCode::Up => self.tree_select.select_relative(&self.tree, -1, !shift),
+            // KeyCode::Down => self.tree_select.select_relative(&self.tree, 1, !shift),
+            // KeyCode::PageDown => self.tree_select.select_relative(&self.tree, 20, !shift),
+            // KeyCode::PageUp => self.tree_select.select_relative(&self.tree, -20, !shift),
+            // KeyCode::Enter => self.modify_list(ListAction::Expand),
+            // KeyCode::Char('g') => self.modify_list(ListAction::Group),
+            // KeyCode::Char('f') => self.full_path = !self.full_path,
+            // KeyCode::Delete => self.modify_list(ListAction::Delete),
+            _ => {}
+        }
+    }
+
     pub fn handle_mouse_click_list(&mut self, _: u16, y: u16) {
         if self
             .tree_select
@@ -173,16 +224,18 @@ impl WaveformState {
     }
 
     pub fn render_waveform(&self) -> Text<'static> {
-        Text::styled(" ", Style::default())
+        let mut text = Text::styled("", Style::default());
+        text.extend(self.time.render(self.viewer_width));
+        text
     }
 
     fn modify_list(&mut self, action: ListAction) {
-        let mut select_offset = self.tree_select.get_primary_selected();
+        // let mut select_offset = self.tree_select.get_primary_selected();
 
-        let selected = match self.tree.get_selected_mut(&mut select_offset) {
-            Some((_, selected)) => selected,
-            None => return,
-        };
+        // let selected = match self.tree.get_selected_mut(&mut select_offset) {
+        //     Some((_, selected)) => selected,
+        //     None => return,
+        // };
 
         // let variables = match selected.get_value() {
         //     NodeValue::Variable(variable) => vec![variable.clone()],
@@ -193,6 +246,13 @@ impl WaveformState {
             ListAction::Group => {}
             ListAction::Delete => {}
             ListAction::Expand => {
+                let mut select_offset = self.tree_select.get_primary_selected();
+
+                let selected = match self.tree.get_selected_mut(&mut select_offset) {
+                    Some((_, selected)) => selected,
+                    None => return,
+                };
+
                 selected.set_expanded(!selected.is_expanded());
                 self.tree_select.scroll_relative(0, select_offset);
             }
