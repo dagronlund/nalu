@@ -1,8 +1,8 @@
-mod component;
 mod resize;
 mod state;
 mod vcd;
 mod view;
+mod widgets;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
@@ -93,17 +93,19 @@ fn render_main_layout(
     .style(Style::default().fg(Color::LightCyan))
     .alignment(Alignment::Left);
 
-    let waveform_browser = Paragraph::new(nalu_state.get_browser_state().render())
+    let waveform_browser = nalu_state
+        .get_browser_state()
+        .get_browser()
         .style(Style::default().fg(Color::LightCyan))
-        .alignment(Alignment::Left)
         .block(get_block(
             nalu_state.get_focus(NaluPanes::Browser),
             Some("Browser"),
         ));
 
-    let waveform_list = Paragraph::new(nalu_state.get_waveform_state().render_list())
+    let waveform_list = nalu_state
+        .get_waveform_state()
+        .get_list_browser()
         .style(Style::default().fg(Color::LightCyan))
-        .alignment(Alignment::Left)
         .block(get_block(
             nalu_state.get_focus(NaluPanes::List),
             Some("List"),
@@ -260,7 +262,10 @@ fn main() -> Result<()> {
             .set_size(&browser_rect, 1);
         nalu_state
             .get_waveform_state_mut()
-            .set_size(&list_rect, &viewer_rect, 1);
+            .set_list_size(&list_rect, 1);
+        nalu_state
+            .get_waveform_state_mut()
+            .set_waveform_size(&viewer_rect, 1);
 
         while !rx_input.is_empty() {
             match rx_input.recv().unwrap() {

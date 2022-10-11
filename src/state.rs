@@ -1,7 +1,5 @@
-mod browser;
 mod filter;
-mod tree;
-mod utils;
+mod hierarchy_browser;
 mod waveform;
 
 use std::path::PathBuf;
@@ -15,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::layout::Rect;
 
 use crate::resize::LayoutResize;
-use crate::state::browser::BrowserState;
+use crate::state::hierarchy_browser::HierarchyBrowserState;
 use crate::state::waveform::WaveformState;
 use crate::vcd::*;
 
@@ -95,7 +93,7 @@ pub struct NaluState {
     filter_input: String,
     palette_input: String,
     done: Option<String>,
-    browser_state: BrowserState,
+    browser_state: HierarchyBrowserState,
     waveform_state: WaveformState,
 }
 
@@ -115,7 +113,7 @@ impl NaluState {
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
-            browser_state: BrowserState::new(),
+            browser_state: HierarchyBrowserState::new(),
             waveform_state: WaveformState::new(),
         }
     }
@@ -411,11 +409,11 @@ impl NaluState {
         self.palette_input.clone()
     }
 
-    pub fn get_browser_state(&self) -> &BrowserState {
+    pub fn get_browser_state(&self) -> &HierarchyBrowserState {
         &self.browser_state
     }
 
-    pub fn get_browser_state_mut(&mut self) -> &mut BrowserState {
+    pub fn get_browser_state_mut(&mut self) -> &mut HierarchyBrowserState {
         &mut self.browser_state
     }
 

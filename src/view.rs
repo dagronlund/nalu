@@ -1,8 +1,3 @@
-mod browser;
-mod filter;
-mod signals;
-mod waves;
-
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::layout::Rect;
 
