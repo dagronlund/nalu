@@ -321,12 +321,11 @@ impl BrowserState {
         self.cursor as usize
     }
 
-    pub fn get_visible_paths<E>(
-        &self,
-        node: &BrowserNode<E>,
-        height: usize,
-    ) -> Vec<BrowserNodePath> {
-        node.get_paths(self.scroll as usize..(self.scroll as usize + height), false)
+    pub fn get_visible_paths<E>(&self, node: &BrowserNode<E>) -> Vec<BrowserNodePath> {
+        node.get_paths(
+            self.scroll as usize..(self.scroll + self.height) as usize,
+            false,
+        )
     }
 
     pub fn get_selected_paths<E>(
@@ -400,6 +399,10 @@ impl BrowserState {
         };
         self.cursor = (self.cursor + delta).clamp(0, (node_height as isize - 1).max(0));
         self.clamp_scroll(render_height);
+    }
+
+    pub fn get_height(&self) -> isize {
+        self.height
     }
 
     pub fn set_height(&mut self, height: isize) {

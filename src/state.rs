@@ -1,12 +1,13 @@
-mod filter;
-mod hierarchy_browser;
-mod waveform;
+pub mod filter;
+pub mod hierarchy_browser;
+pub mod waveform;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use vcd_parser::parser::VcdHeader;
+use vcd_parser::utils::*;
 use vcd_parser::waveform::Waveform;
 
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
@@ -15,7 +16,6 @@ use tui::layout::Rect;
 use crate::resize::LayoutResize;
 use crate::state::hierarchy_browser::HierarchyBrowserState;
 use crate::state::waveform::WaveformState;
-use crate::vcd::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NaluOverlay {
@@ -99,9 +99,10 @@ pub struct NaluState {
 
 impl NaluState {
     pub fn new(vcd_path: PathBuf) -> Self {
-        // Load initial VCD file
+        // Load initial VCD file, TODO: Handle file loading error
+        let bytes = std::fs::read_to_string(&vcd_path).unwrap();
         let progress = Arc::new(Mutex::new((0, 0)));
-        let handle = load_vcd(vcd_path.clone(), progress.clone());
+        let handle = load_multi_threaded(bytes, 4, progress.clone());
         Self {
             vcd_path: vcd_path,
             vcd_handle: Some(handle),
@@ -333,7 +334,10 @@ impl NaluState {
 
     pub fn handle_reload(&mut self) {
         *self.progress.lock().unwrap() = (0, 0);
-        self.vcd_handle = Some(load_vcd(self.vcd_path.clone(), self.progress.clone()));
+        // Load updated VCD file, TODO: Handle file loading error
+        let bytes = std::fs::read_to_string(&self.vcd_path).unwrap();
+        let handle = load_multi_threaded(bytes, 4, self.progress.clone());
+        self.vcd_handle = Some(handle);
     }
 
     pub fn handle_vcd(&mut self) {

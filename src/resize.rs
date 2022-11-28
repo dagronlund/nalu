@@ -9,8 +9,8 @@ pub struct LayoutResize<const N: usize> {
 impl<const N: usize> LayoutResize<N> {
     pub fn new(lengths: [u16; N], min_length: u16) -> Self {
         Self {
-            lengths: lengths,
-            min_length: min_length,
+            lengths,
+            min_length,
             moving_border: None,
         }
     }

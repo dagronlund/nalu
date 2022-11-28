@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
+use crossterm::event::KeyEvent;
 use tui::layout::Rect;
 
 pub enum MouseScrollDirection {

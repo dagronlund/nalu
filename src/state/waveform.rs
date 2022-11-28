@@ -1,22 +1,27 @@
-mod signal;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use tui::{layout::Rect, style::Style, text::Text};
+use tui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::Style,
+    widgets::{Block, Widget},
+};
 
-use vcd_parser::parser::*;
-use vcd_parser::waveform::Waveform;
+use vcd_parser::waveform::bitvector::BitVector;
+use vcd_parser::waveform::{bitvector::BitVectorRadix, Waveform};
+use vcd_parser::{parser::*, waveform::WaveformSignalResult};
+
+use crate::widgets::browser::*;
+use crate::widgets::signal::*;
+use crate::widgets::timescale::*;
 
 use crate::state::hierarchy_browser::HierarchyBrowserRequest;
-use crate::widgets::browser::*;
-use crate::widgets::timescale::*;
 
 #[derive(Clone)]
 pub enum SignalNode {
     Spacer,
     Group(String),
-    VectorSignal(Vec<String>, VcdVariable),
-    VectorSignalComponent(Vec<String>, VcdVariable, usize),
+    VectorSignal(Vec<String>, VcdVariable, BitVectorRadix, Option<usize>),
 }
 
 impl std::fmt::Display for SignalNode {
@@ -24,9 +29,12 @@ impl std::fmt::Display for SignalNode {
         match self {
             Self::Spacer => write!(f, ""),
             Self::Group(name) => write!(f, "{}", name),
-            Self::VectorSignal(_, variable) => write!(f, "{}", variable),
-            Self::VectorSignalComponent(_, variable, index) => {
-                write!(f, "{} [{}]", variable, index)
+            Self::VectorSignal(_, variable, _, index) => {
+                if let Some(index) = index {
+                    write!(f, "{} [{}]", variable, index)
+                } else {
+                    write!(f, "{}", variable)
+                }
             }
         }
     }
@@ -54,13 +62,24 @@ impl Default for SignalNode {
 //     }
 // }
 
-fn create_variable_node(path: Vec<String>, variable: VcdVariable) -> BrowserNode<SignalNode> {
+fn create_variable_node(
+    path: Vec<String>,
+    variable: VcdVariable,
+    radix: BitVectorRadix,
+) -> BrowserNode<SignalNode> {
     BrowserNode::from(
-        Some(SignalNode::VectorSignal(path.clone(), variable.clone())),
+        Some(SignalNode::VectorSignal(
+            path.clone(),
+            variable.clone(),
+            radix,
+            None,
+        )),
         if variable.get_bit_width() > 1 {
             (0..variable.get_bit_width())
                 .into_iter()
-                .map(|i| SignalNode::VectorSignalComponent(path.clone(), variable.clone(), i))
+                .map(|i| {
+                    SignalNode::VectorSignal(path.clone(), variable.clone(), radix.clone(), Some(i))
+                })
                 .map(|n| BrowserNode::new(Some(n)))
                 .collect()
         } else {
@@ -97,27 +116,27 @@ impl WaveformState {
 
     pub fn load_waveform(&mut self, waveform: Waveform, timescale: i32) {
         self.waveform = waveform;
-        let (min, max) = match (
-            self.waveform.get_timestamps().first(),
-            self.waveform.get_timestamps().last(),
-        ) {
-            (Some(start), Some(end)) => (*start, *end),
-            _ => (0, 0),
-        };
-        self.timescale_state.load_waveform(min..max, max, timescale);
+        let range = self.waveform.get_timestamp_range();
+        self.timescale_state
+            .load_waveform(range.clone(), range.end, timescale);
     }
 
-    fn browser_request_append(&mut self, path: Vec<String>, variable: VcdVariable) {
+    fn browser_request_append(
+        &mut self,
+        path: Vec<String>,
+        variable: VcdVariable,
+        radix: BitVectorRadix,
+    ) {
         self.node
             .get_children_mut()
-            .push(create_variable_node(path.clone(), variable));
+            .push(create_variable_node(path.clone(), variable, radix));
     }
 
     fn browser_request_insert(
         &mut self,
-        path: Vec<String>,
-        variable: VcdVariable,
-        insert_path: BrowserNodePath,
+        _path: Vec<String>,
+        _variable: VcdVariable,
+        _insert_path: BrowserNodePath,
     ) -> BrowserNodePath {
         // self.node
         // .get_children_mut()
@@ -138,7 +157,7 @@ impl WaveformState {
         for request in requests {
             match request {
                 HierarchyBrowserRequest::Append(path, variable) => {
-                    self.browser_request_append(path, variable);
+                    self.browser_request_append(path, variable, BitVectorRadix::Hexadecimal);
                 }
                 HierarchyBrowserRequest::Insert(path, variable) => {
                     insert_path = self.browser_request_insert(path, variable, insert_path);
@@ -232,14 +251,37 @@ impl WaveformState {
         Browser::new(&self.list_state, &self.node)
     }
 
-    pub fn get_timescale<'a>(&'a self) -> Timescale<'a> {
-        Timescale::new(&self.timescale_state)
-    }
-
-    pub fn render_waveform(&self) -> Text<'static> {
-        let mut text = Text::styled("", Style::default());
-        text.extend(self.timescale_state.render(self.viewer_width));
-        text
+    pub fn get_waveform_widget<'a>(&'a self) -> WaveformWidget<'a> {
+        let mut signal_widgets = Vec::new();
+        for path in self.list_state.get_visible_paths(&self.node) {
+            let is_selected = self.list_state.get_primary_selected_path(&self.node) == path;
+            if let Some(node) = self.node.get_node(&path) {
+                match node.get_entry().as_ref().unwrap() {
+                    SignalNode::VectorSignal(_, vcd_variable, radix, index) => {
+                        let waveform_entry = WaveformEntry {
+                            storage: &self.waveform,
+                            idcode: vcd_variable.get_idcode(),
+                            index: *index,
+                        };
+                        signal_widgets.push(Some(Signal::new(
+                            &self.timescale_state,
+                            waveform_entry,
+                            radix.clone(),
+                            is_selected,
+                        )));
+                    }
+                    _ => signal_widgets.push(None),
+                }
+            } else {
+                signal_widgets.push(None);
+            }
+        }
+        WaveformWidget {
+            timescale_widget: Timescale::new(&self.timescale_state),
+            signal_widgets,
+            block: None,
+            style: Default::default(),
+        }
     }
 
     fn modify_list(&mut self, action: ListAction) {
@@ -263,6 +305,129 @@ impl WaveformState {
                 if let Some(node) = self.node.get_node_mut(&path) {
                     node.set_expanded(!node.is_expanded());
                 }
+            }
+        }
+    }
+}
+
+pub struct WaveformEntry<'a> {
+    storage: &'a Waveform,
+    idcode: usize,
+    index: Option<usize>,
+}
+
+impl<'a> WaveformEntry<'a> {
+    pub fn new(storage: &'a Waveform, idcode: usize, index: Option<usize>) -> Self {
+        Self {
+            storage,
+            idcode,
+            index,
+        }
+    }
+}
+
+impl<'a> SignalStorage for WaveformEntry<'a> {
+    fn get_value(&self, timestamp_index: usize) -> Option<(usize, SignalValue)> {
+        match self.storage.get_signal(self.idcode) {
+            WaveformSignalResult::Vector(signal) => {
+                if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
+                    let pos = pos.get_index();
+                    let bv = signal.get_bitvector(pos.get_value_index());
+                    let bv = if let Some(index) = self.index {
+                        BitVector::from(bv.get_bit(index))
+                    } else {
+                        bv
+                    };
+                    Some((pos.get_timestamp_index(), SignalValue::Vector(bv)))
+                } else {
+                    None
+                }
+            }
+            WaveformSignalResult::Real(signal) => {
+                if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
+                    let pos = pos.get_index();
+                    let r = signal.get_real(pos.get_value_index());
+                    Some((pos.get_timestamp_index(), SignalValue::Real(r)))
+                } else {
+                    None
+                }
+            }
+            WaveformSignalResult::None => None,
+        }
+    }
+
+    fn search_timestamp(&self, timestamp: u64) -> Option<usize> {
+        self.storage.search_timestamp(timestamp)
+    }
+
+    fn search_timestamp_after(&self, timestamp: u64) -> Option<usize> {
+        self.storage.search_timestamp_after(timestamp)
+    }
+
+    fn search_timestamp_range(
+        &self,
+        timestamp_range: std::ops::Range<u64>,
+        greedy: bool,
+    ) -> Option<std::ops::Range<usize>> {
+        self.storage.search_timestamp_range(timestamp_range, greedy)
+    }
+
+    fn get_timestamps(&self) -> &Vec<u64> {
+        self.storage.get_timestamps()
+    }
+}
+
+pub struct WaveformWidget<'a> {
+    timescale_widget: Timescale<'a>,
+    signal_widgets: Vec<Option<Signal<'a, WaveformEntry<'a>>>>,
+    /// A block to wrap the widget in
+    block: Option<Block<'a>>,
+    /// Widget style
+    style: Style,
+}
+
+impl<'a> WaveformWidget<'a> {
+    pub fn block(mut self, block: Block<'a>) -> Self {
+        self.block = Some(block);
+        self
+    }
+
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+}
+
+impl<'a> Widget for WaveformWidget<'a> {
+    fn render(mut self, area: Rect, buf: &mut Buffer) {
+        buf.set_style(area, self.style);
+        let area = match self.block.take() {
+            Some(b) => {
+                let inner_area = b.inner(area);
+                b.render(area, buf);
+                inner_area
+            }
+            None => area,
+        };
+
+        if area.height < 1 {
+            return;
+        }
+
+        let mut area_line = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        self.timescale_widget.render(area_line, buf);
+        for (i, signal_widget) in self.signal_widgets.into_iter().enumerate() {
+            if (i + 1) as u16 >= area.height {
+                break;
+            }
+            area_line.y = area.y + (i + 1) as u16;
+            if let Some(signal_widget) = signal_widget {
+                signal_widget.render(area_line, buf);
             }
         }
     }

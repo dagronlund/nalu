@@ -16,6 +16,7 @@ serde = {version = "1.0.130", features = ["derive"]}
 clap = { version = "3.1.8", features = ["derive"] }
 tui = "0.18.0"
 lazy_static = "1.4.0"
+backtrace = "0.3.66"
 indiscriminant = "0.2.0"
 byte_storage = { path = "../byte_storage" }
 crossbeam_helper = { path = "../crossbeam_helper" }

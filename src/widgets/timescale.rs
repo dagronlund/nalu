@@ -1,11 +1,10 @@
-use core::ops::Range;
+use std::ops::Range;
 
-use tui::text::{Span, Spans, Text};
 use tui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
-    style::{Color, Style},
-    widgets::{Block, Paragraph, Widget},
+    text::{Span, Spans, Text},
+    widgets::{Paragraph, Widget},
 };
 
 fn render_time(timestamp: u64, resolution: u64, timescale: i32) -> String {
@@ -88,7 +87,7 @@ impl TimescaleState {
         self.timestamp_max = timestamp_max;
     }
 
-    pub fn zoom_left(&mut self, cursor: bool) {
+    pub fn zoom_left(&mut self, _cursor: bool) {
         let width = self.get_width();
         if self.range.start > width / 2 {
             self.range = (self.range.start - (width / 2))..(self.range.end - (width / 2));
@@ -97,7 +96,7 @@ impl TimescaleState {
         }
     }
 
-    pub fn zoom_right(&mut self, cursor: bool) {
+    pub fn zoom_right(&mut self, _cursor: bool) {
         let width = self.get_width();
         if self.range.end < (self.timestamp_max + width / 2) {
             self.range = (self.range.start + (width / 2))..(self.range.end + (width / 2));
@@ -106,14 +105,14 @@ impl TimescaleState {
         }
     }
 
-    pub fn zoom_in(&mut self, cursor: bool) {
+    pub fn zoom_in(&mut self, _cursor: bool) {
         // TODO: Support zooming in around cursor
         // Find the center of the timestamp range and then average start/end with the center
         let center = self.get_center();
         self.range = ((self.range.start + center) / 2)..((self.range.end + center) / 2);
     }
 
-    pub fn zoom_out(&mut self, cursor: bool) {
+    pub fn zoom_out(&mut self, _cursor: bool) {
         // TODO: Support zooming out around cursor
         let center = self.get_center();
         let width = self.get_width();
@@ -122,34 +121,6 @@ impl TimescaleState {
         } else {
             self.range = 0..(width * 2);
         }
-    }
-
-    pub fn render(&self, width: usize) -> Text<'static> {
-        let mut text = Spans::from(Vec::new());
-        if self.range.start == self.range.end {
-            text.0.push(Span::from(format!("|{}|", self.range.start)));
-            return Text::from(text);
-        }
-        let mut timestamp_current = self.range.start;
-        let timestamp_step = if width > 0 {
-            (self.range.end - self.range.start) / width as u64
-        } else {
-            0
-        };
-        // text.0.push(Span::from(format!(
-        //     "<{}><{}>",
-        //     (timestamp_current as f64) * 10.0f64.powi(-self.timescale),
-        //     (timestamp_step as f64) * 10.0f64.powi(-self.timescale),
-        // )));
-        while text.width() < width {
-            let s = format!(
-                "|{}",
-                render_time(timestamp_current, timestamp_step, self.timescale)
-            );
-            timestamp_current += timestamp_step * s.len() as u64;
-            text.0.push(Span::from(s));
-        }
-        Text::from(text)
     }
 
     fn get_width(&self) -> u64 {
@@ -163,34 +134,32 @@ impl TimescaleState {
     fn get_center(&self) -> u64 {
         (self.range.start + self.range.end) / 2
     }
+
+    pub fn get_range(&self) -> Range<u64> {
+        self.range.clone()
+    }
+
+    pub fn get_cursor(&self) -> u64 {
+        self.cursor
+    }
+
+    pub fn get_timescale(&self) -> i32 {
+        self.timescale
+    }
+
+    pub fn get_timestamp_max(&self) -> u64 {
+        self.timestamp_max
+    }
 }
 
 pub struct Timescale<'a> {
     /// The timescale range and cursor position to render
     state: &'a TimescaleState,
-    /// A block to wrap the widget in
-    block: Option<Block<'a>>,
-    /// Widget style
-    style: Style,
 }
 
 impl<'a> Timescale<'a> {
     pub fn new(state: &'a TimescaleState) -> Self {
-        Self {
-            state,
-            block: None,
-            style: Default::default(),
-        }
-    }
-
-    pub fn block(mut self, block: Block<'a>) -> Self {
-        self.block = Some(block);
-        self
-    }
-
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
+        Self { state }
     }
 }
 
@@ -222,14 +191,8 @@ impl<'a> Widget for Timescale<'a> {
             Text::from(text)
         };
 
-        let paragraph = Paragraph::new(text)
+        Paragraph::new(text)
             .alignment(Alignment::Left)
-            .style(self.style);
-        if let Some(block) = self.block {
-            paragraph.block(block)
-        } else {
-            paragraph
-        }
-        .render(area, buf)
+            .render(area, buf)
     }
 }

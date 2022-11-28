@@ -1,8 +1,7 @@
-mod resize;
-mod state;
-mod vcd;
-mod view;
-mod widgets;
+pub mod resize;
+pub mod state;
+pub mod view;
+pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
@@ -111,9 +110,10 @@ fn render_main_layout(
             Some("List"),
         ));
 
-    let waveform_viewer = Paragraph::new(nalu_state.get_waveform_state().render_waveform())
+    let waveform_viewer = nalu_state
+        .get_waveform_state()
+        .get_waveform_widget()
         .style(Style::default().fg(Color::LightCyan))
-        .alignment(Alignment::Left)
         .block(get_block(
             nalu_state.get_focus(NaluPanes::Viewer),
             Some("Viewer"),
@@ -192,30 +192,24 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     Ok(terminal)
 }
 
-fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>, msg: String) -> Result<()> {
+fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     terminal.backend_mut().queue(DisableMouseCapture)?;
     terminal.backend_mut().queue(LeaveAlternateScreen)?;
     terminal.backend_mut().flush()?;
     disable_raw_mode()?;
     terminal.show_cursor()?;
-    println!("{}", msg);
     Ok(())
 }
 
-// h for help menu, q to quit, esc to main menu
-fn main() -> Result<()> {
-    if !stdout().is_tty() {
-        println!("Error: Cannot open viewer when not TTY!");
-        return Ok(());
-    }
+fn cleanup_terminal_force() -> Result<()> {
+    cleanup_terminal(&mut Terminal::new(CrosstermBackend::new(stdout()))?)
+}
 
+fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String> {
     // Setup event listeners
     let args = NaluArgs::parse();
     let (tx_input, rx_input) = unbounded();
     spawn_input_listener(tx_input);
-
-    // Setup terminal for the TUI
-    let mut terminal = setup_terminal()?;
 
     let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
 
@@ -281,8 +275,8 @@ fn main() -> Result<()> {
         }
 
         if let Some(msg) = nalu_state.get_done() {
-            cleanup_terminal(&mut terminal, msg)?;
-            break;
+            cleanup_terminal(terminal)?;
+            return Ok(msg);
         }
 
         // Sleep for unused frame time
@@ -290,6 +284,37 @@ fn main() -> Result<()> {
         let frame_elapsed = frame_start.elapsed();
         if frame_elapsed < frame_target {
             thread::sleep(frame_target - frame_start.elapsed());
+        }
+    }
+}
+
+// Dark magic to capture backtraces from nalu_main, cleanup the terminal state,
+// and then print the backtrace on the normal terminal
+use backtrace::Backtrace;
+use std::cell::RefCell;
+
+thread_local! {
+    static BACKTRACE: RefCell<Option<Backtrace>> = RefCell::new(None);
+}
+
+fn main() -> Result<()> {
+    if !stdout().is_tty() {
+        println!("Error: Cannot open viewer when not TTY!");
+        return Ok(());
+    }
+
+    std::panic::set_hook(Box::new(|_| {
+        let trace = Backtrace::new();
+        BACKTRACE.with(move |b| b.borrow_mut().replace(trace));
+    }));
+
+    // Catch any panics and try to cleanup the terminal first
+    match std::panic::catch_unwind(|| nalu_main(&mut setup_terminal().unwrap()).unwrap()) {
+        Ok(msg) => println!("{}", msg),
+        Err(e) => {
+            cleanup_terminal_force()?;
+            let backtrace = BACKTRACE.with(|b| b.borrow_mut().take()).unwrap();
+            println!("Error:\n{:?}\n{:?}", e, backtrace);
         }
     }
 
