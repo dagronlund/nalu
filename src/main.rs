@@ -1,6 +1,6 @@
+pub mod component;
 pub mod resize;
 pub mod state;
-pub mod view;
 pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
