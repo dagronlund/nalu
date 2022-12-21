@@ -1,12 +1,12 @@
-pub mod component;
 pub mod resize;
 pub mod state;
+pub mod tui_layout;
 pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
 use std::thread;
-use std::time;
+use std::time::{self, Duration, Instant};
 
 use clap::Parser;
 use crossbeam::channel::{unbounded, Sender};
@@ -84,6 +84,7 @@ fn render_main_layout(
     filter_rect: Rect,
     list_rect: Rect,
     viewer_rect: Rect,
+    frame_duration: &mut FrameDuration,
 ) {
     let header = Paragraph::new(format!(
         "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
@@ -128,10 +129,15 @@ fn render_main_layout(
         ));
 
     frame.render_widget(header, header_rect);
+    // frame_duration.timestamp(String::from("draw_header"));
     frame.render_widget(filter, filter_rect);
+    // frame_duration.timestamp(String::from("draw_filter"));
     frame.render_widget(waveform_browser, browser_rect);
+    // frame_duration.timestamp(String::from("draw_browser"));
     frame.render_widget(waveform_list, list_rect);
+    // frame_duration.timestamp(String::from("draw_list"));
     frame.render_widget(waveform_viewer, viewer_rect);
+    frame_duration.timestamp(String::from("draw_viewer"));
 }
 
 fn get_overlay_rect(frame_rect: Rect, overlay_height: u16) -> Rect {
@@ -205,7 +211,38 @@ fn cleanup_terminal_force() -> Result<()> {
     cleanup_terminal(&mut Terminal::new(CrosstermBackend::new(stdout()))?)
 }
 
+#[derive(Debug)]
+pub struct FrameDuration {
+    start: Instant,
+    sections: Vec<(String, Duration)>,
+}
+
+impl FrameDuration {
+    pub fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            sections: Vec::new(),
+        }
+    }
+
+    pub fn timestamp(&mut self, name: String) {
+        let duration = self.start.elapsed();
+        self.sections.push((name, duration));
+        self.start = Instant::now();
+    }
+
+    pub fn total(&self) -> Duration {
+        let mut total = Duration::new(0, 0);
+        for (_, d) in &self.sections {
+            total += d.clone();
+        }
+        total
+    }
+}
+
 fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String> {
+    use std::collections::VecDeque;
+
     // Setup event listeners
     let args = NaluArgs::parse();
     let (tx_input, rx_input) = unbounded();
@@ -213,8 +250,12 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
 
     let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
 
+    let mut durations: VecDeque<FrameDuration> = VecDeque::new();
+
     loop {
-        let frame_start = std::time::Instant::now();
+        let mut frame_duration = FrameDuration::new();
+
+        let frame_start = Instant::now();
 
         let mut browser_rect = Rect::new(0, 0, 0, 0);
         let mut list_rect = Rect::new(0, 0, 0, 0);
@@ -238,6 +279,8 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
             list_rect = waveform_rects[1];
             viewer_rect = waveform_rects[2];
 
+            frame_duration.timestamp(String::from("size_rects"));
+
             render_main_layout(
                 frame,
                 &nalu_state,
@@ -246,11 +289,14 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
                 filter_rect,
                 list_rect,
                 viewer_rect,
+                &mut frame_duration,
             );
             render_overlay_layout(frame, &nalu_state);
+            frame_duration.timestamp(String::from("draw_overlay"));
         })?;
 
         nalu_state.handle_vcd();
+        frame_duration.timestamp(String::from("vcd"));
         nalu_state
             .get_browser_state_mut()
             .set_size(&browser_rect, 1);
@@ -260,6 +306,7 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
         nalu_state
             .get_waveform_state_mut()
             .set_waveform_size(&viewer_rect, 1);
+        frame_duration.timestamp(String::from("size"));
 
         while !rx_input.is_empty() {
             match rx_input.recv().unwrap() {
@@ -273,18 +320,29 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
                 CrosstermEvent::Resize(_, _) => {}
             }
         }
+        frame_duration.timestamp(String::from("input"));
 
         if let Some(msg) = nalu_state.get_done() {
             cleanup_terminal(terminal)?;
+            for d in durations {
+                println!("{:?}, (Total: {:?})", d.sections, d.total());
+            }
             return Ok(msg);
         }
+        frame_duration.timestamp(String::from("check"));
 
         // Sleep for unused frame time
-        let frame_target = std::time::Duration::from_millis(20);
+        let frame_target = Duration::from_millis(20);
         let frame_elapsed = frame_start.elapsed();
         if frame_elapsed < frame_target {
             thread::sleep(frame_target - frame_start.elapsed());
         }
+        frame_duration.timestamp(String::from("sleep"));
+
+        if durations.len() >= 2 {
+            durations.pop_front();
+        }
+        durations.push_back(frame_duration);
     }
 }
 

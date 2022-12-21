@@ -1,6 +1,5 @@
-use crate::component::*;
-
-use crate::component::finder::*;
+use crate::tui_layout::finder::*;
+use crate::tui_layout::*;
 pub(crate) struct TestComponent {
     fill: char,
     name: String,
@@ -19,10 +18,23 @@ impl Component for TestComponent {
     fn as_component_simple_mut(&mut self) -> &mut dyn ComponentSimple {
         self
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl ComponentSimple for TestComponent {
-    fn handle_mouse(&mut self, _: u16, _: u16, _: MouseEventKind) {}
+    fn handle_mouse(&mut self, _: u16, _: u16, kind: Option<MouseEventKind>) {
+        let Some(_) = kind else {
+            if self.focus != ComponentFocus::None {
+                self.focus = ComponentFocus::None;
+                self.invalidate()
+            }
+            return;
+        };
+    }
+
     fn handle_key(&mut self, _: KeyEvent) {}
 
     fn invalidate(&mut self) {
@@ -87,6 +99,23 @@ impl ComponentSimple for TestComponent {
     fn get_name(&self) -> String {
         self.name.clone()
     }
+
+    fn get_border(&self, x: u16, y: u16) -> Option<ComponentBorder> {
+        if x >= self.get_width() || y >= self.get_height() {
+            return None;
+        }
+        if x < self.get_border_width() {
+            Some(ComponentBorder::Left)
+        } else if x >= self.get_width() - self.get_border_width() {
+            Some(ComponentBorder::Right)
+        } else if y < self.get_border_width() {
+            Some(ComponentBorder::Top)
+        } else if y >= self.get_height() - self.get_border_width() {
+            Some(ComponentBorder::Bottom)
+        } else {
+            None
+        }
+    }
 }
 
 impl ComponentFinder for TestComponent {
@@ -145,7 +174,7 @@ impl ComponentFinder for TestComponent {
 fn test_component_container() -> Result<(), ComponentResizeError> {
     use crossterm::event::KeyModifiers;
 
-    use crate::component::tests::*;
+    use crate::tui_layout::tests::*;
 
     let component_a = TestComponent {
         fill: 'a',
@@ -385,6 +414,25 @@ fn test_component_container() -> Result<(), ComponentResizeError> {
         }
         ComponentFocusResult::None => panic!("A component should be partial focused!"),
     }
+
+    assert_eq!(list_horizontal.get_border(1, 0), Some(ComponentBorder::Top));
+    assert_eq!(
+        list_horizontal.get_border(0, 1),
+        Some(ComponentBorder::Left)
+    );
+    assert_eq!(
+        list_horizontal.get_border(0, 6),
+        Some(ComponentBorder::Left)
+    );
+    assert_eq!(list_horizontal.get_border(15, 1), None);
+    assert_eq!(
+        list_horizontal.get_border(1, 7),
+        Some(ComponentBorder::Bottom)
+    );
+    assert_eq!(
+        list_horizontal.get_border(31, 1),
+        Some(ComponentBorder::Right)
+    );
 
     Ok(())
 }

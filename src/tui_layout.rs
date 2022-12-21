@@ -5,8 +5,8 @@ mod tests;
 use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
 use tui::{buffer::Buffer, layout::Rect};
 
-use crate::component::finder::*;
-use crate::component::pos::*;
+use crate::tui_layout::finder::*;
+use crate::tui_layout::pos::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentResizeError {
@@ -29,8 +29,16 @@ pub enum ComponentFocusResult<T> {
     None,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComponentBorder {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 pub trait ComponentSimple {
-    fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind);
+    fn handle_mouse(&mut self, x: u16, y: u16, kind: Option<MouseEventKind>);
     fn handle_key(&mut self, e: KeyEvent);
 
     /// Indicates that this component and all sub-components need to be redrawn
@@ -53,6 +61,9 @@ pub trait ComponentSimple {
     fn get_focus(&self) -> ComponentFocus;
 
     fn get_name(&self) -> String;
+
+    /// Returns which border the x,y position is on, or none if not on a border
+    fn get_border(&self, x: u16, y: u16) -> Option<ComponentBorder>;
 }
 
 pub trait Component
@@ -61,6 +72,7 @@ where
 {
     fn as_component_simple(&self) -> &dyn ComponentSimple;
     fn as_component_simple_mut(&mut self) -> &mut dyn ComponentSimple;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,10 +103,17 @@ impl ComponentListOrientation {
     }
 }
 
+enum ComponentListResize {
+    _Left(u16, usize),
+    _Right(u16, usize),
+    None,
+}
+
 pub struct ComponentList {
     name: String,
     orientation: ComponentListOrientation,
     _resizable: ComponentListResizable,
+    _resize: ComponentListResize,
     width: u16,
     height: u16,
     components: Vec<Box<dyn Component>>,
@@ -112,6 +131,7 @@ impl ComponentList {
             name,
             orientation,
             _resizable,
+            _resize: ComponentListResize::None,
             width,
             height,
             components: Vec::new(),
@@ -137,8 +157,7 @@ impl ComponentList {
     }
 
     /// Sets all the components to be proportioned sizes in the container
-    pub fn calculate_sizes(ratios: Vec<f64>, total_size: u16) -> Vec<u16> {
-        // assert_eq!(self.components.len(), ratios.len());
+    fn calculate_sizes(ratios: Vec<f64>, total_size: u16) -> Vec<u16> {
         let sum = ratios.iter().sum::<f64>();
         let ratios = ratios.iter().map(|r| r / sum).collect::<Vec<f64>>();
         let mut sizes = Vec::new();
@@ -187,22 +206,29 @@ impl Component for ComponentList {
     fn as_component_simple_mut(&mut self) -> &mut dyn ComponentSimple {
         self
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl ComponentSimple for ComponentList {
-    fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind) {
-        let mouse_pos = ComponentPos { x, y };
-        if let Some((component, pos)) = self.locate_component_mut(mouse_pos.clone()) {
-            match component.get_focus() {
-                ComponentFocus::Focus => {
-                    let relative_pos = (mouse_pos - pos).unwrap();
-                    component.handle_mouse(relative_pos.x, relative_pos.y, kind);
-                    component.invalidate();
-                }
-                ComponentFocus::PartialFocus | ComponentFocus::None => {
-                    component.set_focus(ComponentFocus::Focus);
-                    component.invalidate();
-                }
+    fn handle_mouse(&mut self, x: u16, y: u16, kind: Option<MouseEventKind>) {
+        let (width, height, orientation) = (
+            self.get_width(),
+            self.get_height(),
+            self.orientation.clone(),
+        );
+        let (mut offset_x, mut offset_y) = (0, 0);
+        for component in &mut self.components {
+            if x >= width || y >= height || x < offset_x || y < offset_y {
+                component.handle_mouse(0, 0, None);
+            } else {
+                component.handle_mouse(x - offset_x, y - offset_y, kind);
+            }
+            match orientation {
+                ComponentListOrientation::Horizontal => offset_x += component.get_width(),
+                ComponentListOrientation::Vertical => offset_y += component.get_height(),
             }
         }
     }
@@ -331,5 +357,56 @@ impl ComponentSimple for ComponentList {
 
     fn set_focus(&mut self, _: ComponentFocus) {
         panic!("The focus should not be set directly on containers!");
+    }
+
+    fn get_border(&self, x: u16, y: u16) -> Option<ComponentBorder> {
+        let mut offset = 0;
+        for (i, component) in (&self.components).iter().enumerate() {
+            match self.orientation {
+                ComponentListOrientation::Horizontal => {
+                    if x >= self.get_width() || y >= self.get_height() || x < offset {
+                        return None;
+                    }
+                    match component.get_border(x - offset, y) {
+                        Some(ComponentBorder::Top) => return Some(ComponentBorder::Top),
+                        Some(ComponentBorder::Bottom) => return Some(ComponentBorder::Bottom),
+                        Some(ComponentBorder::Left) => {
+                            if i == 0 {
+                                return Some(ComponentBorder::Left);
+                            }
+                        }
+                        Some(ComponentBorder::Right) => {
+                            if i == self.components.len() - 1 {
+                                return Some(ComponentBorder::Right);
+                            }
+                        }
+                        None => {}
+                    }
+                    offset += component.get_width();
+                }
+                ComponentListOrientation::Vertical => {
+                    if x >= self.get_width() || y >= self.get_height() || y < offset {
+                        return None;
+                    }
+                    match component.get_border(x, y - offset) {
+                        Some(ComponentBorder::Top) => {
+                            if i == 0 {
+                                return Some(ComponentBorder::Top);
+                            }
+                        }
+                        Some(ComponentBorder::Bottom) => {
+                            if i == self.components.len() - 1 {
+                                return Some(ComponentBorder::Bottom);
+                            }
+                        }
+                        Some(ComponentBorder::Left) => return Some(ComponentBorder::Left),
+                        Some(ComponentBorder::Right) => return Some(ComponentBorder::Right),
+                        None => {}
+                    }
+                    offset += component.get_height();
+                }
+            }
+        }
+        None
     }
 }

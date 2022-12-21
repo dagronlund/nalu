@@ -1,4 +1,4 @@
-use crate::component::*;
+use crate::tui_layout::*;
 
 pub trait ComponentFinder {
     fn get_focused_component(&self) -> ComponentFocusResult<(&dyn Component, ComponentPos)>;
