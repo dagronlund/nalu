@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::{
     buffer::Buffer,
     layout::Rect,
@@ -98,21 +98,28 @@ impl Component {
 
 impl ComponentBase for Component {
     fn handle_mouse(&mut self, x: u16, y: u16, kind: Option<MouseEventKind>) {
-        if x >= self.get_width() || y >= self.get_height() {
+        // Check if the mouse event is none, unfocus if true
+        let Some(kind) = kind else {
             self.set_focus(Focus::None);
-        } else if let Some(kind) = kind {
-            self.set_focus(Focus::Focus);
-            if x >= self.border_width
-                && y >= self.border_width
-                && x < self.width - self.border_width * 2
-                && y < self.height - self.border_width * 2
-            {
-                self.widget
-                    .handle_mouse(x - self.border_width, y - self.border_width, kind);
-                self.invalidate();
-            }
-        } else {
-            self.set_focus(Focus::None);
+            return;
+        };
+        // Determine if the mouse event is in the component and the widget
+        let in_component = x < self.width && y < self.height;
+        let in_widget = x >= self.border_width
+            && y >= self.border_width
+            && x < self.width - self.border_width * 2
+            && y < self.height - self.border_width * 2;
+        // Check if the mouse event should focus this component
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) if in_component => self.set_focus(Focus::Focus),
+            MouseEventKind::Drag(MouseButton::Left) if in_component => self.set_focus(Focus::Focus),
+            _ => {}
+        }
+        // Send mouse event to widget if mouse is in widget and component focused
+        if in_widget && self.focus == Focus::Focus {
+            let (x, y) = (x - self.border_width, y - self.border_width);
+            self.widget.handle_mouse(x, y, kind);
+            self.invalidate();
         }
     }
 

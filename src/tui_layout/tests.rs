@@ -1,6 +1,6 @@
 #[test]
 fn test_component_container() -> Result<(), crate::tui_layout::ResizeError> {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
     use tui::{
         buffer::Buffer,
         layout::{Direction, Rect},
@@ -30,6 +30,18 @@ fn test_component_container() -> Result<(), crate::tui_layout::ResizeError> {
                 }
             }
         }
+    }
+
+    fn render_helper(component_base: &mut dyn ComponentBase) -> Buffer {
+        let rect = Rect::new(
+            0,
+            0,
+            component_base.get_width(),
+            component_base.get_height(),
+        );
+        let mut buffer = Buffer::empty(rect.clone());
+        component_base.render(rect, &mut buffer);
+        buffer
     }
 
     let component_a = Component::new(
@@ -75,14 +87,14 @@ fn test_component_container() -> Result<(), crate::tui_layout::ResizeError> {
     list_horizontal.resize(20, 10)?;
     list_horizontal.resize(32, 8)?;
 
-    let rect = Rect::new(
-        0,
-        0,
-        list_horizontal.get_width(),
-        list_horizontal.get_height(),
-    );
-    let mut buffer = Buffer::empty(rect.clone());
-    list_horizontal.render(rect, &mut buffer);
+    // let rect = Rect::new(
+    //     0,
+    //     0,
+    //     list_horizontal.get_width(),
+    //     list_horizontal.get_height(),
+    // );
+    // let mut buffer = Buffer::empty(rect.clone());
+    // list_horizontal.render(rect, &mut buffer);
 
     let expected = [
         "╭a─────────────╮╭c─────────────╮",
@@ -95,13 +107,16 @@ fn test_component_container() -> Result<(), crate::tui_layout::ResizeError> {
         "╰──────────────╯╰──────────────╯",
     ];
 
-    for y in 0..rect.height {
-        for x in 0..rect.width {
+    let buffer = render_helper(list_horizontal.as_base_mut());
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
             assert_eq!(
                 buffer.get(x, y).symbol.chars().nth(0).unwrap(),
                 expected[y as usize].chars().nth(x as usize).unwrap()
             );
+            print!("{}", buffer.get(x, y).symbol);
         }
+        println!();
     }
 
     let (comp, pos) = list_horizontal
@@ -269,6 +284,34 @@ fn test_component_container() -> Result<(), crate::tui_layout::ResizeError> {
     assert_eq!(list_horizontal.get_border(15, 1), None);
     assert_eq!(list_horizontal.get_border(1, 7), Some(Border::Bottom));
     assert_eq!(list_horizontal.get_border(31, 1), Some(Border::Right));
+
+    let expected = [
+        "╭a──────────────╮╭c────────────╮",
+        "│aaaaaaaaaaaaaaa││ccccccccccccc│",
+        "│aaaaaaaaaaaaaaa││ccccccccccccc│",
+        "╰───────────────╯│ccccccccccccc│",
+        "╭b──────────────╮│ccccccccccccc│",
+        "│bbbbbbbbbbbbbbb││ccccccccccccc│",
+        "│bbbbbbbbbbbbbbb││ccccccccccccc│",
+        "╰───────────────╯╰─────────────╯",
+    ];
+
+    list_horizontal.handle_mouse(16, 4, Some(MouseEventKind::Down(MouseButton::Left)));
+    list_horizontal.handle_mouse(17, 4, Some(MouseEventKind::Drag(MouseButton::Left)));
+    list_horizontal.handle_mouse(17, 4, None);
+    list_horizontal.handle_mouse(18, 4, Some(MouseEventKind::Drag(MouseButton::Left)));
+
+    let buffer = render_helper(list_horizontal.as_base_mut());
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            assert_eq!(
+                buffer.get(x, y).symbol.chars().nth(0).unwrap(),
+                expected[y as usize].chars().nth(x as usize).unwrap()
+            );
+            print!("{}", buffer.get(x, y).symbol);
+        }
+        println!();
+    }
 
     Ok(())
 }

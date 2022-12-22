@@ -67,12 +67,7 @@ impl From<ComponentPos> for Rect {
 }
 
 impl ComponentPos {
-    pub(crate) fn into_rect(self, width: u16, height: u16) -> Rect {
-        Rect {
-            x: self.x,
-            y: self.y,
-            width,
-            height,
-        }
+    pub fn intersects_rect(&self, r: Rect) -> bool {
+        self.x >= r.x && self.x < (r.x + r.width) && self.y >= r.y && self.y < (r.y + r.height)
     }
 }

@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::{
     buffer::Buffer,
     layout::{Direction, Rect},
@@ -9,24 +9,78 @@ use crate::tui_layout::{
     ResizeError,
 };
 
-pub(crate) fn orientation_scalar(orientation: &Direction, width: u16, height: u16) -> u16 {
+fn orientation_scalar(orientation: &Direction, width: u16, height: u16) -> u16 {
     match orientation {
         Direction::Horizontal => width,
         Direction::Vertical => height,
     }
 }
 
+fn find_next_pos(
+    pos: ComponentPos,
+    border: Border,
+    component_width: u16,
+    component_height: u16,
+    container_width: u16,
+    container_height: u16,
+) -> Option<ComponentPos> {
+    match border {
+        Border::Top if pos.y > 0 => Some(ComponentPos {
+            x: pos.x,
+            y: pos.y - 1,
+        }),
+        Border::Bottom if pos.y + component_height < container_height => Some(ComponentPos {
+            x: pos.x,
+            y: pos.y + component_height,
+        }),
+        Border::Left if pos.x > 0 => Some(ComponentPos {
+            x: pos.x - 1,
+            y: pos.y,
+        }),
+        Border::Right if pos.x + component_width < container_width => Some(ComponentPos {
+            x: pos.x + component_width,
+            y: pos.y,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum Resize {
-    _Left(u16, usize),
-    _Right(u16, usize),
+    LeftTop {
+        mouse_offset: u16,
+        child_index: usize,
+    },
+    RightBottom {
+        mouse_offset: u16,
+        child_index: usize,
+    },
     None,
+}
+
+impl Resize {
+    fn new(mouse_offset: u16, border: Border, child_index: usize, child_len: usize) -> Self {
+        let first = child_index == 0;
+        let last = child_index == child_len - 1;
+        match border {
+            Border::Left | Border::Top if !first => Self::LeftTop {
+                mouse_offset,
+                child_index,
+            },
+            Border::Right | Border::Bottom if !last => Self::RightBottom {
+                mouse_offset,
+                child_index,
+            },
+            _ => Self::None,
+        }
+    }
 }
 
 pub struct ContainerList {
     name: String,
     orientation: Direction,
-    _resizable: bool,
-    _resize: Resize,
+    resizable: bool,
+    resize: Resize,
     width: u16,
     height: u16,
     children: Vec<ContainerChild>,
@@ -36,15 +90,15 @@ impl ContainerList {
     pub fn new(
         name: String,
         orientation: Direction,
-        _resizable: bool,
+        resizable: bool,
         width: u16,
         height: u16,
     ) -> Self {
         Self {
             name,
             orientation,
-            _resizable,
-            _resize: Resize::None,
+            resizable,
+            resize: Resize::None,
             width,
             height,
             children: Vec::new(),
@@ -116,6 +170,87 @@ impl ContainerList {
     pub fn get_orientation(&self) -> Direction {
         self.orientation.clone()
     }
+
+    fn handle_resize(
+        &mut self,
+        mouse_offset_next: u16,
+        orientation: Direction,
+        kind: MouseEventKind,
+    ) {
+        // Clear resizing if not resizable or mouse event is not left drag
+        if !self.resizable || kind != MouseEventKind::Drag(MouseButton::Left) {
+            self.resize = Resize::None;
+            return;
+        }
+        // Get indices of affected child components and the drag delta
+        let (index0, index1, delta) = match self.resize {
+            Resize::LeftTop {
+                mouse_offset,
+                child_index,
+            } => (
+                child_index - 1,
+                child_index,
+                mouse_offset_next as i16 - mouse_offset as i16,
+            ),
+            Resize::RightBottom {
+                mouse_offset,
+                child_index,
+            } => (
+                child_index,
+                child_index + 1,
+                mouse_offset_next as i16 - mouse_offset as i16,
+            ),
+            Resize::None => return,
+        };
+        // Get current sizes of child components
+        let (width0, height0, width1, height1) = (
+            self.get_children()[index0].as_base().get_width(),
+            self.get_children()[index0].as_base().get_height(),
+            self.get_children()[index1].as_base().get_width(),
+            self.get_children()[index1].as_base().get_height(),
+        );
+        // Use orientation and drag to calculate new width/height
+        let (width0, height0, width1, height1) = match orientation {
+            Direction::Horizontal => {
+                let width0 = width0 as i16 + delta;
+                let width1 = width1 as i16 - delta;
+                if width0 <= 0 || width1 <= 0 {
+                    return;
+                }
+                (width0 as u16, height0, width1 as u16, height1)
+            }
+            Direction::Vertical => {
+                let height0 = height0 as i16 + delta;
+                let height1 = height1 as i16 - delta;
+                if height0 <= 0 || height1 <= 0 {
+                    return;
+                }
+                (width0, height0 as u16, width1, height1 as u16)
+            }
+        };
+        // Use delta to determine which component to size first, none if 0
+        let (index0, width0, height0, index1, width1, height1) = if delta < 0 {
+            (index0, width0, height0, index1, width1, height1)
+        } else if delta > 0 {
+            (index1, width1, height1, index0, width0, height0)
+        } else {
+            return;
+        };
+        // Resize component that is getting smaller first, there should be
+        // no issue resizing component that is getting bigger
+        if let Err(_) = self.get_children_mut()[index0]
+            .as_base_mut()
+            .resize(width0, height0)
+        {
+            return;
+        }
+        assert_eq!(
+            self.get_children_mut()[index1]
+                .as_base_mut()
+                .resize(width1, height1),
+            Ok(())
+        );
+    }
 }
 
 impl Container for ContainerList {
@@ -154,7 +289,7 @@ impl Container for ContainerList {
     }
 
     fn is_resizable(&self) -> bool {
-        self._resizable
+        self.resizable
     }
 
     fn as_container(&self) -> &dyn Container {
@@ -166,74 +301,44 @@ impl Container for ContainerList {
     }
 }
 
-fn find_next_pos(
-    pos: ComponentPos,
-    border: Border,
-    component_width: u16,
-    component_height: u16,
-    container_width: u16,
-    container_height: u16,
-) -> Option<ComponentPos> {
-    match border {
-        Border::Top => {
-            if pos.y == 0 {
-                return None;
-            }
-            Some(ComponentPos {
-                x: pos.x,
-                y: pos.y - 1,
-            })
-        }
-        Border::Bottom => {
-            if pos.y + component_height >= container_height {
-                return None;
-            }
-            Some(ComponentPos {
-                x: pos.x,
-                y: pos.y + component_height,
-            })
-        }
-        Border::Left => {
-            if pos.x == 0 {
-                return None;
-            }
-            Some(ComponentPos {
-                x: pos.x - 1,
-                y: pos.y,
-            })
-        }
-        Border::Right => {
-            if pos.x + component_width >= container_width {
-                return None;
-            }
-            Some(ComponentPos {
-                x: pos.x + component_width,
-                y: pos.y,
-            })
-        }
-    }
-}
-
 impl ComponentBase for ContainerList {
     fn handle_mouse(&mut self, x: u16, y: u16, kind: Option<MouseEventKind>) {
-        let (width, height, orientation) = (
-            self.get_width(),
-            self.get_height(),
-            self.orientation.clone(),
-        );
-        let (mut offset_x, mut offset_y) = (0, 0);
-        for component in &mut self.children {
-            if x >= width || y >= height || x < offset_x || y < offset_y {
-                component.as_base_mut().handle_mouse(0, 0, None);
-            } else {
-                component
-                    .as_base_mut()
-                    .handle_mouse(x - offset_x, y - offset_y, kind);
+        // Check if the mouse event is none
+        let Some(kind) = kind else {
+            // Issue none to all children
+            for child in &mut self.children {
+                child.as_base_mut().handle_mouse(0, 0, None);
             }
-            match orientation {
-                Direction::Horizontal => offset_x += component.as_base().get_width(),
-                Direction::Vertical => offset_y += component.as_base().get_height(),
+            // Clear current resizing
+            self.resize = Resize::None;
+            return;
+        };
+        // Handle an ongoing resize event
+        let mouse_offset = match self.orientation {
+            Direction::Horizontal => x,
+            Direction::Vertical => y,
+        };
+        self.handle_resize(mouse_offset, self.get_orientation(), kind);
+        let mouse_pos = ComponentPos { x, y };
+        let child_rects = self.as_container().get_children_rectangles();
+        // Iterate through children, dispatching mouse event if intersects
+        for (i, child) in (&mut self.children).iter_mut().enumerate() {
+            // Check mouse intersection, issue none if no intersection
+            if !mouse_pos.intersects_rect(child_rects[i].clone()) {
+                child.as_base_mut().handle_mouse(0, 0, None);
+                continue;
             }
+            let (child_x, child_y) = (x - child_rects[i].x, y - child_rects[i].y);
+            // Check if mouse intersects a child border
+            if let Some(border) = child.as_base().get_border(child_x, child_y) {
+                if let MouseEventKind::Down(MouseButton::Left) = kind {
+                    self.resize = Resize::new(mouse_offset, border, i, child_rects.len());
+                }
+            }
+            // Mouse intersected the child component/container
+            child
+                .as_base_mut()
+                .handle_mouse(child_x, child_y, Some(kind));
         }
     }
 
@@ -242,6 +347,7 @@ impl ComponentBase for ContainerList {
         // Send key event to the (partially) focused component
         match self.as_container_mut().search_focused_mut() {
             FocusResult::Focus((component, pos)) | FocusResult::PartialFocus((component, pos)) => {
+                // Process key and see if focus needs to change
                 let Some(border) = component.handle_key(event) else {
                     return None;
                 };
@@ -319,17 +425,17 @@ impl ComponentBase for ContainerList {
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         assert_eq!(area.width, self.width);
         assert_eq!(area.height, self.height);
-        let mut sub_area = area.clone();
-        for component in &mut self.children {
-            match self.orientation {
-                Direction::Horizontal => sub_area.width = component.as_base().get_width(),
-                Direction::Vertical => sub_area.height = component.as_base().get_height(),
-            }
-            component.as_base_mut().render(sub_area, buf);
-            match self.orientation {
-                Direction::Horizontal => sub_area.x += component.as_base().get_width(),
-                Direction::Vertical => sub_area.y += component.as_base().get_height(),
-            }
+        let child_rects = self.as_container().get_children_rectangles();
+        for (i, child) in (&mut self.children).iter_mut().enumerate() {
+            child.as_base_mut().render(
+                Rect {
+                    x: child_rects[i].x + area.x,
+                    y: child_rects[i].y + area.y,
+                    height: child_rects[i].height,
+                    width: child_rects[i].width,
+                },
+                buf,
+            );
         }
     }
 
@@ -357,49 +463,34 @@ impl ComponentBase for ContainerList {
     }
 
     fn get_border(&self, x: u16, y: u16) -> Option<Border> {
-        let (mut offset_x, mut offset_y) = (0, 0);
+        let pos = ComponentPos { x, y };
+        let child_rects = self.as_container().get_children_rectangles();
         for (i, component) in (&self.children).iter().enumerate() {
-            if x >= self.get_width() || y >= self.get_height() || x < offset_x || y < offset_y {
+            let first = i == 0;
+            let last = i == self.children.len() - 1;
+            // Check if position in this child, otherwise try next one
+            if !pos.intersects_rect(child_rects[i].clone()) {
+                continue;
+            }
+            // If this child has no matching border, then no other child will
+            let border = component
+                .as_base()
+                .get_border(x - child_rects[i].x, y - child_rects[i].y);
+            let Some(border) = border else {
                 return None;
-            }
-            match self.orientation {
-                Direction::Horizontal => {
-                    match component.as_base().get_border(x - offset_x, y - offset_y) {
-                        Some(Border::Top) => return Some(Border::Top),
-                        Some(Border::Bottom) => return Some(Border::Bottom),
-                        Some(Border::Left) => {
-                            if i == 0 {
-                                return Some(Border::Left);
-                            }
-                        }
-                        Some(Border::Right) => {
-                            if i == self.children.len() - 1 {
-                                return Some(Border::Right);
-                            }
-                        }
-                        None => {}
-                    }
-                    offset_x += component.as_base().get_width();
-                }
-                Direction::Vertical => {
-                    match component.as_base().get_border(x - offset_x, y - offset_y) {
-                        Some(Border::Top) => {
-                            if i == 0 {
-                                return Some(Border::Top);
-                            }
-                        }
-                        Some(Border::Bottom) => {
-                            if i == self.children.len() - 1 {
-                                return Some(Border::Bottom);
-                            }
-                        }
-                        Some(Border::Left) => return Some(Border::Left),
-                        Some(Border::Right) => return Some(Border::Right),
-                        None => {}
-                    }
-                    offset_y += component.as_base().get_height();
-                }
-            }
+            };
+            // Check if there is a matching border
+            return match (&self.orientation, border) {
+                (Direction::Horizontal, Border::Top) => Some(Border::Top),
+                (Direction::Horizontal, Border::Bottom) => Some(Border::Bottom),
+                (Direction::Horizontal, Border::Left) if first => Some(Border::Left),
+                (Direction::Horizontal, Border::Right) if last => Some(Border::Right),
+                (Direction::Vertical, Border::Top) if first => Some(Border::Top),
+                (Direction::Vertical, Border::Bottom) if last => Some(Border::Bottom),
+                (Direction::Vertical, Border::Left) => Some(Border::Left),
+                (Direction::Vertical, Border::Right) => Some(Border::Right),
+                _ => None,
+            };
         }
         None
     }
