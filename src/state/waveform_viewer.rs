@@ -15,18 +15,22 @@ use crate::widgets::timescale::*;
 
 use crate::signal_viewer::SignalNode;
 
-pub struct WaveformState {
+pub struct WaveformViewerRequest(pub KeyEvent);
+
+pub struct WaveformViewerState {
     width: usize,
     waveform: Waveform,
     timescale_state: TimescaleState,
+    requests: Vec<WaveformViewerRequest>,
 }
 
-impl WaveformState {
+impl WaveformViewerState {
     pub fn new() -> Self {
         Self {
             width: 0,
             waveform: Waveform::new(),
             timescale_state: TimescaleState::new(),
+            requests: Vec::new(),
         }
     }
 
@@ -45,7 +49,7 @@ impl WaveformState {
     //     self.list_state.scroll_relative(&self.node, 0);
     // }
 
-    pub fn set_waveform_size(&mut self, size: &Rect, border_width: u16) {
+    pub fn set_size(&mut self, size: &Rect, border_width: u16) {
         self.width = if size.width > (border_width * 2) {
             (size.width - (border_width * 2)) as usize
         } else {
@@ -76,7 +80,7 @@ impl WaveformState {
     pub fn handle_key(&mut self, event: KeyEvent) {
         // let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         // let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-        match event.code {
+        match event.clone().code {
             KeyCode::Char('-') => self.timescale_state.zoom_out(false),
             KeyCode::Char('=') => self.timescale_state.zoom_in(false),
             KeyCode::Char('[') => self.timescale_state.zoom_left(false),
@@ -85,14 +89,14 @@ impl WaveformState {
             KeyCode::Char('+') => self.timescale_state.zoom_in(true),
             KeyCode::Char('{') => self.timescale_state.zoom_left(true),
             KeyCode::Char('}') => self.timescale_state.zoom_right(true),
-            // KeyCode::Up
-            // | KeyCode::Down
-            // | KeyCode::PageDown
-            // | KeyCode::PageUp
-            // | KeyCode::Enter
-            // | KeyCode::Char('g')
-            // | KeyCode::Char('f')
-            // | KeyCode::Delete => self.handle_key_list(event),
+            KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::PageDown
+            | KeyCode::PageUp
+            | KeyCode::Enter
+            | KeyCode::Char('g')
+            | KeyCode::Char('f')
+            | KeyCode::Delete => self.requests.push(WaveformViewerRequest(event)),
             _ => {}
         }
     }
@@ -176,6 +180,12 @@ impl WaveformState {
     //         }
     //     }
     // }
+
+    pub fn get_requests(&mut self) -> Vec<WaveformViewerRequest> {
+        let mut requests = Vec::new();
+        std::mem::swap(&mut requests, &mut self.requests);
+        requests
+    }
 }
 
 pub struct WaveformEntry<'a> {

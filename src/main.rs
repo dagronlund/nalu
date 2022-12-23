@@ -22,10 +22,7 @@ use tui::{
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame, Terminal,
 };
-use tui_layout::{
-    component::{Component, ComponentBase, ComponentWidget},
-    container::{list::ContainerList, Container},
-};
+use tui_layout::container::Container;
 
 use crate::state::*;
 
@@ -60,7 +57,7 @@ fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
     });
 }
 
-fn get_tui_container() -> Box<dyn Container> {
+fn _get_tui_container() -> Box<dyn Container> {
     todo!();
 }
 
@@ -86,9 +83,9 @@ fn render_main_layout(
     frame: &mut Frame<CrosstermBackend<std::io::Stdout>>,
     nalu_state: &NaluState,
     header_rect: Rect,
-    browser_rect: Rect,
+    netlist_rect: Rect,
     filter_rect: Rect,
-    list_rect: Rect,
+    signal_rect: Rect,
     viewer_rect: Rect,
     frame_duration: &mut FrameDuration,
 ) {
@@ -99,8 +96,8 @@ fn render_main_layout(
     .style(Style::default().fg(Color::LightCyan))
     .alignment(Alignment::Left);
 
-    let waveform_browser = nalu_state
-        .get_browser_state()
+    let netlist_state = nalu_state
+        .get_netlist_state()
         .get_browser()
         .style(Style::default().fg(Color::LightCyan))
         .block(get_block(
@@ -108,9 +105,9 @@ fn render_main_layout(
             Some("Browser"),
         ));
 
-    let waveform_list = nalu_state
-        .get_waveform_state()
-        .get_list_browser()
+    let signal_state = nalu_state
+        .get_signal_state()
+        .get_browser()
         .style(Style::default().fg(Color::LightCyan))
         .block(get_block(
             nalu_state.get_focus(NaluPanes::List),
@@ -119,7 +116,10 @@ fn render_main_layout(
 
     let waveform_viewer = nalu_state
         .get_waveform_state()
-        .get_waveform_widget()
+        .get_waveform_widget(
+            nalu_state.get_signal_state().get_browser_state(),
+            nalu_state.get_signal_state().get_node(),
+        )
         .style(Style::default().fg(Color::LightCyan))
         .block(get_block(
             nalu_state.get_focus(NaluPanes::Viewer),
@@ -135,13 +135,9 @@ fn render_main_layout(
         ));
 
     frame.render_widget(header, header_rect);
-    // frame_duration.timestamp(String::from("draw_header"));
     frame.render_widget(filter, filter_rect);
-    // frame_duration.timestamp(String::from("draw_filter"));
-    frame.render_widget(waveform_browser, browser_rect);
-    // frame_duration.timestamp(String::from("draw_browser"));
-    frame.render_widget(waveform_list, list_rect);
-    // frame_duration.timestamp(String::from("draw_list"));
+    frame.render_widget(netlist_state, netlist_rect);
+    frame.render_widget(signal_state, signal_rect);
     frame.render_widget(waveform_viewer, viewer_rect);
     frame_duration.timestamp(String::from("draw_viewer"));
 }
@@ -303,13 +299,11 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
 
         nalu_state.handle_vcd();
         frame_duration.timestamp(String::from("vcd"));
-        nalu_state.get_browser_state_mut().set_size(&browser_rect);
+        nalu_state.get_netlist_state_mut().set_size(&browser_rect);
+        nalu_state.get_signal_state_mut().set_size(&list_rect, 1);
         nalu_state
             .get_waveform_state_mut()
-            .set_list_size(&list_rect, 1);
-        nalu_state
-            .get_waveform_state_mut()
-            .set_waveform_size(&viewer_rect, 1);
+            .set_size(&viewer_rect, 1);
         frame_duration.timestamp(String::from("size"));
 
         while !rx_input.is_empty() {

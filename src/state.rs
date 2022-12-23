@@ -16,7 +16,8 @@ use tui::layout::Rect;
 
 use crate::resize::LayoutResize;
 use crate::state::netlist_viewer::NetlistViewerState;
-use crate::state::signal_viewer::WaveformState;
+use crate::state::signal_viewer::SignalViewerState;
+use crate::state::waveform_viewer::WaveformViewerState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NaluOverlay {
@@ -94,8 +95,9 @@ pub struct NaluState {
     filter_input: String,
     palette_input: String,
     done: Option<String>,
-    browser_state: NetlistViewerState,
-    waveform_state: WaveformState,
+    netlist_state: NetlistViewerState,
+    signal_state: SignalViewerState,
+    waveform_state: WaveformViewerState,
 }
 
 impl NaluState {
@@ -115,8 +117,9 @@ impl NaluState {
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
-            browser_state: NetlistViewerState::new(),
-            waveform_state: WaveformState::new(),
+            netlist_state: NetlistViewerState::new(),
+            signal_state: SignalViewerState::new(),
+            waveform_state: WaveformViewerState::new(),
         }
     }
 
@@ -136,12 +139,12 @@ impl NaluState {
         if sizing.browser.intersects(coord) {
             match self.focus {
                 NaluFocus::Browser(NaluFocusType::Full) => {
-                    self.browser_state.handle_mouse_click(
+                    self.netlist_state.handle_mouse_click(
                         x - sizing.browser.left() - 1,
                         y - sizing.browser.top() - 1,
                     );
-                    self.waveform_state
-                        .browser_request(self.browser_state.get_requests());
+                    self.signal_state
+                        .browser_request(self.netlist_state.get_requests());
                 }
                 _ => self.focus = NaluFocus::Browser(NaluFocusType::Full),
             }
@@ -150,10 +153,8 @@ impl NaluState {
         if sizing.list.intersects(coord) {
             match self.focus {
                 NaluFocus::List(NaluFocusType::Full) => {
-                    self.waveform_state.handle_mouse_click_list(
-                        x - sizing.list.left() - 1,
-                        y - sizing.list.top() - 1,
-                    );
+                    self.signal_state
+                        .handle_mouse_click(x - sizing.list.left() - 1, y - sizing.list.top() - 1);
                 }
                 _ => self.focus = NaluFocus::List(NaluFocusType::Full),
             }
@@ -193,11 +194,11 @@ impl NaluState {
         self.resizing.handle_mouse_done();
         match self.focus {
             NaluFocus::Browser(NaluFocusType::Full) => {
-                self.browser_state.handle_mouse_scroll(scroll_up)
+                self.netlist_state.handle_mouse_scroll(scroll_up)
             }
             // TODO: Handle passing mouse event to component(s)
             NaluFocus::List(NaluFocusType::Full) => {
-                self.waveform_state.handle_mouse_scroll_list(scroll_up)
+                self.signal_state.handle_mouse_scroll(scroll_up)
             }
             NaluFocus::Viewer(NaluFocusType::Full) => {}
             NaluFocus::Filter(NaluFocusType::Full) => {}
@@ -226,9 +227,9 @@ impl NaluState {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
                         _ => {
-                            self.browser_state.handle_key_press(event);
-                            self.waveform_state
-                                .browser_request(self.browser_state.get_requests());
+                            self.netlist_state.handle_key_press(event);
+                            self.signal_state
+                                .browser_request(self.netlist_state.get_requests());
                         }
                     }
                 } else {
@@ -247,7 +248,7 @@ impl NaluState {
                         KeyCode::Esc => self.focus = NaluFocus::Filter(NaluFocusType::Partial),
                         key => {
                             edit_string(key, &mut self.filter_input);
-                            self.browser_state.update_filter(self.filter_input.clone());
+                            self.netlist_state.update_filter(self.filter_input.clone());
                         }
                     }
                 } else {
@@ -264,7 +265,7 @@ impl NaluState {
                 if let NaluFocusType::Full = focus_type {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
-                        _ => self.waveform_state.handle_key_list(event),
+                        _ => self.signal_state.handle_key(event),
                     }
                 } else {
                     match event.code {
@@ -280,7 +281,10 @@ impl NaluState {
                 if let NaluFocusType::Full = focus_type {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
-                        _ => self.waveform_state.handle_key_viewer(event),
+                        _ => self.waveform_state.handle_key(event),
+                    }
+                    for request in self.waveform_state.get_requests() {
+                        self.signal_state.handle_key(request.0);
                     }
                 } else {
                     match event.code {
@@ -360,7 +364,7 @@ impl NaluState {
             Ok((vcd_header, waveform)) => {
                 self.overlay = NaluOverlay::None;
                 self.vcd_header = vcd_header;
-                self.browser_state
+                self.netlist_state
                     .update_scopes(&self.vcd_header.get_scopes());
                 let timescale = self.vcd_header.get_timescale();
                 self.waveform_state.load_waveform(
@@ -416,19 +420,27 @@ impl NaluState {
         self.palette_input.clone()
     }
 
-    pub fn get_browser_state(&self) -> &NetlistViewerState {
-        &self.browser_state
+    pub fn get_netlist_state(&self) -> &NetlistViewerState {
+        &self.netlist_state
     }
 
-    pub fn get_browser_state_mut(&mut self) -> &mut NetlistViewerState {
-        &mut self.browser_state
+    pub fn get_netlist_state_mut(&mut self) -> &mut NetlistViewerState {
+        &mut self.netlist_state
     }
 
-    pub fn get_waveform_state(&self) -> &WaveformState {
+    pub fn get_signal_state(&self) -> &SignalViewerState {
+        &self.signal_state
+    }
+
+    pub fn get_signal_state_mut(&mut self) -> &mut SignalViewerState {
+        &mut self.signal_state
+    }
+
+    pub fn get_waveform_state(&self) -> &WaveformViewerState {
         &self.waveform_state
     }
 
-    pub fn get_waveform_state_mut(&mut self) -> &mut WaveformState {
+    pub fn get_waveform_state_mut(&mut self) -> &mut WaveformViewerState {
         &mut self.waveform_state
     }
 

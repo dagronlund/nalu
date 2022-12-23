@@ -286,7 +286,7 @@ fn signal_render_test() {
     use std::thread;
     use vcd_parser::waveform::*;
 
-    use crate::state::signal_viewer::*;
+    use crate::state::waveform_viewer::*;
 
     let fname = "res/gecko.vcd";
 
