@@ -1,6 +1,5 @@
 pub mod resize;
 pub mod state;
-pub mod tui_layout;
 pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
@@ -10,9 +9,6 @@ use std::time::{self, Duration, Instant};
 
 use clap::Parser;
 use crossbeam::channel::{unbounded, Sender};
-
-use crate::state::*;
-
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -26,6 +22,12 @@ use tui::{
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame, Terminal,
 };
+use tui_layout::{
+    component::{Component, ComponentBase, ComponentWidget},
+    container::{list::ContainerList, Container},
+};
+
+use crate::state::*;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -56,6 +58,10 @@ fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
             tx.send(event::read().unwrap()).unwrap();
         }
     });
+}
+
+fn get_tui_container() -> Box<dyn Container> {
+    todo!();
 }
 
 fn get_main_layout() -> Layout {
@@ -297,9 +303,7 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
 
         nalu_state.handle_vcd();
         frame_duration.timestamp(String::from("vcd"));
-        nalu_state
-            .get_browser_state_mut()
-            .set_size(&browser_rect, 1);
+        nalu_state.get_browser_state_mut().set_size(&browser_rect);
         nalu_state
             .get_waveform_state_mut()
             .set_list_size(&list_rect, 1);
@@ -317,7 +321,10 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
                     event.kind,
                     NaluSizing::new(browser_rect, list_rect, viewer_rect, filter_rect),
                 ),
-                CrosstermEvent::Resize(_, _) => {}
+                CrosstermEvent::Resize(_, _)
+                | CrosstermEvent::FocusGained
+                | CrosstermEvent::FocusLost
+                | CrosstermEvent::Paste(_) => {}
             }
         }
         frame_duration.timestamp(String::from("input"));

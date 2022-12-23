@@ -15,7 +15,7 @@ use crate::widgets::browser::*;
 use crate::widgets::signal::*;
 use crate::widgets::timescale::*;
 
-use crate::state::hierarchy_browser::HierarchyBrowserRequest;
+use crate::state::netlist_viewer::NetlistViewerRequest;
 
 #[derive(Clone)]
 pub enum SignalNode {
@@ -152,14 +152,14 @@ impl WaveformState {
         BrowserNodePath::new(Vec::new())
     }
 
-    pub fn browser_request(&mut self, requests: Vec<HierarchyBrowserRequest>) {
+    pub fn browser_request(&mut self, requests: Vec<NetlistViewerRequest>) {
         let mut insert_path = self.list_state.get_primary_selected_path(&self.node);
         for request in requests {
             match request {
-                HierarchyBrowserRequest::Append(path, variable) => {
+                NetlistViewerRequest::Append(path, variable) => {
                     self.browser_request_append(path, variable, BitVectorRadix::Hexadecimal);
                 }
-                HierarchyBrowserRequest::Insert(path, variable) => {
+                NetlistViewerRequest::Insert(path, variable) => {
                     insert_path = self.browser_request_insert(path, variable, insert_path);
 
                     // let mut select_offset = self.tree_select.get_primary_selected();

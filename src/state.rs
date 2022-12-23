@@ -1,6 +1,7 @@
 pub mod filter;
-pub mod hierarchy_browser;
-pub mod waveform;
+pub mod netlist_viewer;
+pub mod signal_viewer;
+pub mod waveform_viewer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,8 +15,8 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEventKind};
 use tui::layout::Rect;
 
 use crate::resize::LayoutResize;
-use crate::state::hierarchy_browser::HierarchyBrowserState;
-use crate::state::waveform::WaveformState;
+use crate::state::netlist_viewer::NetlistViewerState;
+use crate::state::signal_viewer::WaveformState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NaluOverlay {
@@ -93,7 +94,7 @@ pub struct NaluState {
     filter_input: String,
     palette_input: String,
     done: Option<String>,
-    browser_state: HierarchyBrowserState,
+    browser_state: NetlistViewerState,
     waveform_state: WaveformState,
 }
 
@@ -114,7 +115,7 @@ impl NaluState {
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
-            browser_state: HierarchyBrowserState::new(),
+            browser_state: NetlistViewerState::new(),
             waveform_state: WaveformState::new(),
         }
     }
@@ -135,11 +136,12 @@ impl NaluState {
         if sizing.browser.intersects(coord) {
             match self.focus {
                 NaluFocus::Browser(NaluFocusType::Full) => {
-                    let request = self.browser_state.handle_mouse_click(
+                    self.browser_state.handle_mouse_click(
                         x - sizing.browser.left() - 1,
                         y - sizing.browser.top() - 1,
                     );
-                    self.waveform_state.browser_request(request);
+                    self.waveform_state
+                        .browser_request(self.browser_state.get_requests());
                 }
                 _ => self.focus = NaluFocus::Browser(NaluFocusType::Full),
             }
@@ -224,8 +226,9 @@ impl NaluState {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
                         _ => {
-                            let requests = self.browser_state.handle_key(event);
-                            self.waveform_state.browser_request(requests);
+                            self.browser_state.handle_key_press(event);
+                            self.waveform_state
+                                .browser_request(self.browser_state.get_requests());
                         }
                     }
                 } else {
@@ -413,11 +416,11 @@ impl NaluState {
         self.palette_input.clone()
     }
 
-    pub fn get_browser_state(&self) -> &HierarchyBrowserState {
+    pub fn get_browser_state(&self) -> &NetlistViewerState {
         &self.browser_state
     }
 
-    pub fn get_browser_state_mut(&mut self) -> &mut HierarchyBrowserState {
+    pub fn get_browser_state_mut(&mut self) -> &mut NetlistViewerState {
         &mut self.browser_state
     }
 
