@@ -1,19 +1,17 @@
-use crossterm::event::{KeyCode, KeyEvent};
-
+use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
 use tui::{
     buffer::Buffer,
     layout::Rect,
-    style::Style,
+    style::{Color, Style},
     widgets::{Block, Widget},
 };
+use tui_layout::component::ComponentWidget;
 
 use vcd_parser::waveform::{bitvector::BitVector, Waveform, WaveformSignalResult};
 
-use crate::widgets::browser::*;
+use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
 use crate::widgets::signal::*;
 use crate::widgets::timescale::*;
-
-use crate::signal_viewer::SignalNode;
 
 pub struct WaveformViewerRequest(pub KeyEvent);
 
@@ -21,6 +19,7 @@ pub struct WaveformViewerState {
     width: usize,
     waveform: Waveform,
     timescale_state: TimescaleState,
+    signal_entries: Vec<Option<SignalViewerEntry>>,
     requests: Vec<WaveformViewerRequest>,
 }
 
@@ -30,6 +29,7 @@ impl WaveformViewerState {
             width: 0,
             waveform: Waveform::new(),
             timescale_state: TimescaleState::new(),
+            signal_entries: Vec::new(),
             requests: Vec::new(),
         }
     }
@@ -41,14 +41,6 @@ impl WaveformViewerState {
             .load_waveform(range.clone(), range.end, timescale);
     }
 
-    // pub fn set_list_size(&mut self, size: &Rect, border_width: u16) {
-    //     // Handle extra room above/below hierarchy in browser
-    //     let margin = border_width as isize * 2;
-    //     self.list_state
-    //         .set_height((size.height as isize - margin).max(0));
-    //     self.list_state.scroll_relative(&self.node, 0);
-    // }
-
     pub fn set_size(&mut self, size: &Rect, border_width: u16) {
         self.width = if size.width > (border_width * 2) {
             (size.width - (border_width * 2)) as usize
@@ -57,27 +49,7 @@ impl WaveformViewerState {
         };
     }
 
-    // pub fn handle_key_list(&mut self, event: KeyEvent) {
-    //     let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-    //     match event.code {
-    //         KeyCode::Up => self.list_state.select_relative(&self.node, -1, !shift),
-    //         KeyCode::Down => self.list_state.select_relative(&self.node, 1, !shift),
-    //         KeyCode::PageDown => self.list_state.select_relative(&self.node, 20, !shift),
-    //         KeyCode::PageUp => self.list_state.select_relative(&self.node, -20, !shift),
-    //         KeyCode::Enter => self.modify_list(ListAction::Expand),
-    //         KeyCode::Char('g') => self.modify_list(ListAction::Group),
-    //         KeyCode::Char('f') => {
-    //             self.list_state
-    //                 .set_indent_enabled(!self.list_state.is_full_name_enabled());
-    //             self.list_state
-    //                 .set_full_name_enabled(!self.list_state.is_full_name_enabled());
-    //         }
-    //         KeyCode::Delete => self.modify_list(ListAction::Delete),
-    //         _ => {}
-    //     }
-    // }
-
-    pub fn handle_key(&mut self, event: KeyEvent) {
+    pub fn handle_key_press(&mut self, event: KeyEvent) {
         // let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         // let shift = event.modifiers.contains(KeyModifiers::SHIFT);
         match event.clone().code {
@@ -101,49 +73,20 @@ impl WaveformViewerState {
         }
     }
 
-    // pub fn handle_mouse_click_list(&mut self, _: u16, y: u16) {
-    //     if self
-    //         .list_state
-    //         .select_absolute(&self.node, y as isize, true)
-    //     {
-    //         self.modify_list(ListAction::Expand);
-    //     }
-    // }
-
-    // pub fn handle_mouse_scroll_list(&mut self, scroll_up: bool) {
-    //     self.list_state
-    //         .select_relative(&self.node, if scroll_up { -5 } else { 5 }, true);
-    // }
-
-    // pub fn get_list_browser<'a>(&'a self) -> Browser<'a, SignalNode> {
-    //     Browser::new(&self.list_state, &self.node)
-    // }
-
-    pub fn get_waveform_widget<'a>(
-        &'a self,
-        list_state: &'a BrowserState,
-        node: &'a BrowserNode<SignalNode>,
-    ) -> WaveformWidget<'a> {
+    pub fn get_waveform_widget<'a>(&'a self) -> WaveformWidget<'a> {
         let mut signal_widgets = Vec::new();
-        for path in list_state.get_visible_paths(&node) {
-            let is_selected = list_state.get_primary_selected_path(&node) == path;
-            if let Some(node) = node.get_node(&path) {
-                match node.get_entry().as_ref().unwrap() {
-                    SignalNode::VectorSignal(_, vcd_variable, radix, index) => {
-                        let waveform_entry = WaveformEntry {
-                            storage: &self.waveform,
-                            idcode: vcd_variable.get_idcode(),
-                            index: *index,
-                        };
-                        signal_widgets.push(Some(Signal::new(
-                            &self.timescale_state,
-                            waveform_entry,
-                            radix.clone(),
-                            is_selected,
-                        )));
-                    }
-                    _ => signal_widgets.push(None),
-                }
+        for signal_entry in &self.signal_entries {
+            if let Some(signal_entry) = signal_entry {
+                signal_widgets.push(Some(Signal::new(
+                    &self.timescale_state,
+                    WaveformEntry {
+                        storage: &self.waveform,
+                        idcode: signal_entry.idcode,
+                        index: signal_entry.index,
+                    },
+                    signal_entry.radix,
+                    signal_entry.is_selected,
+                )));
             } else {
                 signal_widgets.push(None);
             }
@@ -153,6 +96,12 @@ impl WaveformViewerState {
             signal_widgets,
             block: None,
             style: Default::default(),
+        }
+    }
+
+    pub fn signal_request(&mut self, requests: Vec<SignalViewerRequest>) {
+        for request in requests {
+            self.signal_entries = request.0;
         }
     }
 
@@ -308,5 +257,31 @@ impl<'a> Widget for WaveformWidget<'a> {
                 signal_widget.render(area_line, buf);
             }
         }
+    }
+}
+
+impl ComponentWidget for WaveformViewerState {
+    fn handle_mouse(&mut self, _x: u16, _y: u16, _kind: MouseEventKind) {}
+
+    fn handle_key(&mut self, e: KeyEvent) {
+        self.handle_key_press(e);
+    }
+
+    fn resize(&mut self, width: u16, height: u16) {
+        self.set_size(
+            &Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            1,
+        );
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.get_waveform_widget()
+            .style(Style::default().fg(Color::LightCyan))
+            .render(area, buf);
     }
 }

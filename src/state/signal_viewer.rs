@@ -1,13 +1,17 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use tui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::Widget,
+};
+use tui_layout::component::ComponentWidget;
 
-use tui::layout::Rect;
-
-use vcd_parser::parser::*;
+use vcd_parser::parser::VcdVariable;
 use vcd_parser::waveform::bitvector::BitVectorRadix;
 
-use crate::widgets::browser::*;
-
 use crate::state::netlist_viewer::NetlistViewerRequest;
+use crate::widgets::browser::*;
 
 #[derive(Clone)]
 pub enum SignalNode {
@@ -87,9 +91,19 @@ enum ListAction {
     Expand,
 }
 
+pub struct SignalViewerEntry {
+    pub(crate) idcode: usize,
+    pub(crate) index: Option<usize>,
+    pub(crate) radix: BitVectorRadix,
+    pub(crate) is_selected: bool,
+}
+
+pub struct SignalViewerRequest(pub(crate) Vec<Option<SignalViewerEntry>>);
+
 pub struct SignalViewerState {
     browser: BrowserState,
     node: BrowserNode<SignalNode>,
+    requests: Vec<SignalViewerRequest>,
 }
 
 impl SignalViewerState {
@@ -97,6 +111,7 @@ impl SignalViewerState {
         Self {
             browser: BrowserState::new(true, true, false),
             node: BrowserNode::from_expanded(None, true, Vec::new()),
+            requests: Vec::new(),
         }
     }
 
@@ -150,6 +165,7 @@ impl SignalViewerState {
                 }
             }
         }
+        self.push_request();
     }
 
     pub fn set_size(&mut self, size: &Rect, border_width: u16) {
@@ -158,9 +174,10 @@ impl SignalViewerState {
         self.browser
             .set_height((size.height as isize - margin).max(0));
         self.browser.scroll_relative(&self.node, 0);
+        self.push_request();
     }
 
-    pub fn handle_key(&mut self, event: KeyEvent) {
+    pub fn handle_key_press(&mut self, event: KeyEvent) {
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
         match event.code {
             KeyCode::Up => self.browser.select_relative(&self.node, -1, !shift),
@@ -178,41 +195,20 @@ impl SignalViewerState {
             KeyCode::Delete => self.modify(ListAction::Delete),
             _ => {}
         }
+        self.push_request();
     }
-
-    // pub fn handle_key_viewer(&mut self, event: KeyEvent) {
-    //     // let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
-    //     // let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-    //     match event.code {
-    //         KeyCode::Char('-') => self.timescale_state.zoom_out(false),
-    //         KeyCode::Char('=') => self.timescale_state.zoom_in(false),
-    //         KeyCode::Char('[') => self.timescale_state.zoom_left(false),
-    //         KeyCode::Char(']') => self.timescale_state.zoom_right(false),
-    //         KeyCode::Char('_') => self.timescale_state.zoom_out(true),
-    //         KeyCode::Char('+') => self.timescale_state.zoom_in(true),
-    //         KeyCode::Char('{') => self.timescale_state.zoom_left(true),
-    //         KeyCode::Char('}') => self.timescale_state.zoom_right(true),
-    //         KeyCode::Up
-    //         | KeyCode::Down
-    //         | KeyCode::PageDown
-    //         | KeyCode::PageUp
-    //         | KeyCode::Enter
-    //         | KeyCode::Char('g')
-    //         | KeyCode::Char('f')
-    //         | KeyCode::Delete => self.handle_key_list(event),
-    //         _ => {}
-    //     }
-    // }
 
     pub fn handle_mouse_click(&mut self, _: u16, y: u16) {
         if self.browser.select_absolute(&self.node, y as isize, true) {
             self.modify(ListAction::Expand);
         }
+        self.push_request();
     }
 
     pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
         self.browser
             .select_relative(&self.node, if scroll_up { -5 } else { 5 }, true);
+        self.push_request();
     }
 
     pub fn get_browser<'a>(&'a self) -> Browser<'a, SignalNode> {
@@ -250,5 +246,68 @@ impl SignalViewerState {
                 }
             }
         }
+        self.push_request();
+    }
+
+    pub fn push_request(&mut self) {
+        let mut request = Vec::new();
+        for path in self.browser.get_visible_paths(&self.node) {
+            let is_selected = self.browser.get_primary_selected_path(&self.node) == path;
+            let Some(node) = self.node.get_node(&path) else {
+                request.push(None);
+                continue;
+            };
+            request.push(match node.get_entry().as_ref().unwrap() {
+                SignalNode::VectorSignal(_, vcd_variable, radix, index) => {
+                    Some(SignalViewerEntry {
+                        idcode: vcd_variable.get_idcode(),
+                        index: *index,
+                        radix: radix.clone(),
+                        is_selected,
+                    })
+                }
+                _ => None,
+            });
+        }
+        self.requests.push(SignalViewerRequest(request));
+    }
+
+    pub fn get_requests(&mut self) -> Vec<SignalViewerRequest> {
+        let mut requests = Vec::new();
+        std::mem::swap(&mut requests, &mut self.requests);
+        requests
+    }
+}
+
+impl ComponentWidget for SignalViewerState {
+    fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind) {
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_click(x, y),
+            MouseEventKind::ScrollDown => self.handle_mouse_scroll(false),
+            MouseEventKind::ScrollUp => self.handle_mouse_scroll(true),
+            _ => {}
+        }
+    }
+
+    fn handle_key(&mut self, e: KeyEvent) {
+        self.handle_key_press(e);
+    }
+
+    fn resize(&mut self, width: u16, height: u16) {
+        self.set_size(
+            &Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            1,
+        );
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.get_browser()
+            .style(Style::default().fg(Color::LightCyan))
+            .render(area, buf);
     }
 }

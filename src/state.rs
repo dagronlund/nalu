@@ -143,8 +143,6 @@ impl NaluState {
                         x - sizing.browser.left() - 1,
                         y - sizing.browser.top() - 1,
                     );
-                    self.signal_state
-                        .browser_request(self.netlist_state.get_requests());
                 }
                 _ => self.focus = NaluFocus::Browser(NaluFocusType::Full),
             }
@@ -228,8 +226,6 @@ impl NaluState {
                         KeyCode::Esc => self.focus = NaluFocus::Browser(NaluFocusType::Partial),
                         _ => {
                             self.netlist_state.handle_key_press(event);
-                            self.signal_state
-                                .browser_request(self.netlist_state.get_requests());
                         }
                     }
                 } else {
@@ -265,7 +261,7 @@ impl NaluState {
                 if let NaluFocusType::Full = focus_type {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::List(NaluFocusType::Partial),
-                        _ => self.signal_state.handle_key(event),
+                        _ => self.signal_state.handle_key_press(event),
                     }
                 } else {
                     match event.code {
@@ -281,10 +277,7 @@ impl NaluState {
                 if let NaluFocusType::Full = focus_type {
                     match event.code.clone() {
                         KeyCode::Esc => self.focus = NaluFocus::Viewer(NaluFocusType::Partial),
-                        _ => self.waveform_state.handle_key(event),
-                    }
-                    for request in self.waveform_state.get_requests() {
-                        self.signal_state.handle_key(request.0);
+                        _ => self.waveform_state.handle_key_press(event),
                     }
                 } else {
                     match event.code {
@@ -337,6 +330,16 @@ impl NaluState {
                 _ => self.handle_key_non_overlay(event),
             },
         }
+    }
+
+    pub fn handle_requests(&mut self) {
+        for request in self.waveform_state.get_requests() {
+            self.signal_state.handle_key_press(request.0);
+        }
+        self.signal_state
+            .browser_request(self.netlist_state.get_requests());
+        self.waveform_state
+            .signal_request(self.signal_state.get_requests());
     }
 
     pub fn handle_reload(&mut self) {

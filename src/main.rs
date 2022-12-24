@@ -116,10 +116,7 @@ fn render_main_layout(
 
     let waveform_viewer = nalu_state
         .get_waveform_state()
-        .get_waveform_widget(
-            nalu_state.get_signal_state().get_browser_state(),
-            nalu_state.get_signal_state().get_node(),
-        )
+        .get_waveform_widget()
         .style(Style::default().fg(Color::LightCyan))
         .block(get_block(
             nalu_state.get_focus(NaluPanes::Viewer),
@@ -321,6 +318,7 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String
                 | CrosstermEvent::Paste(_) => {}
             }
         }
+        nalu_state.handle_requests();
         frame_duration.timestamp(String::from("input"));
 
         if let Some(msg) = nalu_state.get_done() {
