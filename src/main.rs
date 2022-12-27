@@ -1,4 +1,3 @@
-pub mod resize;
 pub mod state;
 pub mod widgets;
 
@@ -13,40 +12,30 @@ use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     tty::IsTty,
-    QueueableCommand, Result,
+    QueueableCommand, Result as CrosstermResult,
 };
 use tui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Direction, Rect},
     style::{Color, Style},
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame, Terminal,
 };
-use tui_layout::container::Container;
+use tui_layout::{
+    component::{simple::ComponentWidgetSimple, Component, ComponentBaseWidget},
+    container::{list::ContainerList, search::ContainerSearch, Container},
+    ResizeError,
+};
 
+use crate::state::netlist_viewer::NetlistViewerState;
+use crate::state::signal_viewer::SignalViewerState;
+use crate::state::waveform_viewer::WaveformViewerState;
 use crate::state::*;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 struct NaluArgs {
     vcd_file: String,
-}
-
-fn get_block<'a>(focus: Option<NaluFocusType>, title: Option<&'a str>) -> Block<'a> {
-    let color = match focus {
-        Some(NaluFocusType::Full) => Color::Green,
-        Some(NaluFocusType::Partial) => Color::Yellow,
-        None => Color::White,
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().fg(color))
-        .border_type(BorderType::Rounded);
-    if let Some(title) = title {
-        block.title(title)
-    } else {
-        block
-    }
 }
 
 fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
@@ -57,86 +46,54 @@ fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
     });
 }
 
-fn _get_tui_container() -> Box<dyn Container> {
-    todo!();
-}
+fn get_tui() -> Result<Box<dyn Container>, ResizeError> {
+    let mut netlist_main =
+        ContainerList::new("netlist_main".to_string(), Direction::Vertical, false, 0, 0);
+    netlist_main.add_component(Component::new(
+        "netlist".to_string(),
+        1,
+        Box::new(NetlistViewerState::new()),
+    ))?;
+    let mut netlist_filter = Component::new(
+        "filter".to_string(),
+        1,
+        Box::new(ComponentWidgetSimple::new().text(format!("TODO: Filter"))),
+    );
+    netlist_filter.set_fixed_height(Some(3));
+    netlist_main.add_component(netlist_filter)?;
 
-fn get_main_layout() -> Layout {
-    Layout::default()
-        .direction(Direction::Vertical)
-        .margin(0)
-        .constraints([Constraint::Length(1), Constraint::Min(2)].as_ref())
-}
+    let mut main = ContainerList::new("main".to_string(), Direction::Horizontal, true, 0, 0);
+    main.add_container(Box::new(netlist_main))?;
+    main.add_component(Component::new(
+        "signal".to_string(),
+        1,
+        Box::new(SignalViewerState::new()),
+    ))?;
+    main.add_component(Component::new(
+        "waveform".to_string(),
+        1,
+        Box::new(WaveformViewerState::new()),
+    ))?;
 
-fn get_waveform_layout() -> Layout {
-    Layout::default().direction(Direction::Horizontal).margin(0)
-}
+    let mut nalu = ContainerList::new("nalu".to_string(), Direction::Vertical, false, 0, 0);
+    let mut header = Component::new(
+        "header".to_string(),
+        0,
+        Box::new(
+            ComponentWidgetSimple::new()
+                .text(format!(
+                    "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
+                    option_env!("CARGO_PKG_VERSION").unwrap_or("0.0.0")
+                ))
+                .style(Style::default().fg(Color::LightCyan))
+                .alignment(Alignment::Left),
+        ),
+    );
+    header.set_fixed_height(Some(1));
+    nalu.add_component(header)?;
+    nalu.add_container(Box::new(main))?;
 
-fn get_browser_layout() -> Layout {
-    Layout::default()
-        .direction(Direction::Vertical)
-        .margin(0)
-        .constraints([Constraint::Min(2), Constraint::Length(3)].as_ref())
-}
-
-fn render_main_layout(
-    frame: &mut Frame<CrosstermBackend<std::io::Stdout>>,
-    nalu_state: &NaluState,
-    header_rect: Rect,
-    netlist_rect: Rect,
-    filter_rect: Rect,
-    signal_rect: Rect,
-    viewer_rect: Rect,
-    frame_duration: &mut FrameDuration,
-) {
-    let header = Paragraph::new(format!(
-        "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
-        option_env!("CARGO_PKG_VERSION").unwrap_or("0.0.0")
-    ))
-    .style(Style::default().fg(Color::LightCyan))
-    .alignment(Alignment::Left);
-
-    let netlist_state = nalu_state
-        .get_netlist_state()
-        .get_browser()
-        .style(Style::default().fg(Color::LightCyan))
-        .block(get_block(
-            nalu_state.get_focus(NaluPanes::Browser),
-            Some("Browser"),
-        ));
-
-    let signal_state = nalu_state
-        .get_signal_state()
-        .get_browser()
-        .style(Style::default().fg(Color::LightCyan))
-        .block(get_block(
-            nalu_state.get_focus(NaluPanes::List),
-            Some("List"),
-        ));
-
-    let waveform_viewer = nalu_state
-        .get_waveform_state()
-        .get_waveform_widget()
-        .style(Style::default().fg(Color::LightCyan))
-        .block(get_block(
-            nalu_state.get_focus(NaluPanes::Viewer),
-            Some("Viewer"),
-        ));
-
-    let filter = Paragraph::new(nalu_state.get_filter())
-        .style(Style::default().fg(Color::LightCyan))
-        .alignment(Alignment::Left)
-        .block(get_block(
-            nalu_state.get_focus(NaluPanes::Filter),
-            Some("Filter"),
-        ));
-
-    frame.render_widget(header, header_rect);
-    frame.render_widget(filter, filter_rect);
-    frame.render_widget(netlist_state, netlist_rect);
-    frame.render_widget(signal_state, signal_rect);
-    frame.render_widget(waveform_viewer, viewer_rect);
-    frame_duration.timestamp(String::from("draw_viewer"));
+    Ok(Box::new(nalu))
 }
 
 fn get_overlay_rect(frame_rect: Rect, overlay_height: u16) -> Rect {
@@ -160,26 +117,50 @@ fn render_overlay_layout(
     match &nalu_state.get_overlay() {
         NaluOverlay::Loading => frame.render_widget(
             Gauge::default()
-                .block(get_block(None, Some("Loading")))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .border_type(BorderType::Rounded)
+                        .title("Loading"),
+                )
                 .gauge_style(Style::default().fg(Color::LightCyan))
                 .percent(nalu_state.get_percent() as u16),
             get_overlay_rect(frame.size(), 3),
         ),
         NaluOverlay::HelpPrompt => frame.render_widget(
             Paragraph::new("<Insert Help Messages>")
-                .block(get_block(None, Some("Help")))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .border_type(BorderType::Rounded)
+                        .title("Help"),
+                )
                 .style(Style::default().fg(Color::LightCyan)),
             get_overlay_rect(frame.size(), 10),
         ),
         NaluOverlay::QuitPrompt => frame.render_widget(
             Paragraph::new("Press q to quit, esc to not...")
-                .block(get_block(None, Some("Quit?")))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .border_type(BorderType::Rounded)
+                        .title("Quit?"),
+                )
                 .style(Style::default().fg(Color::LightCyan)),
             get_overlay_rect(frame.size(), 3),
         ),
         NaluOverlay::Palette => frame.render_widget(
             Paragraph::new(nalu_state.get_palette())
-                .block(get_block(None, Some("Palette")))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .border_type(BorderType::Rounded)
+                        .title("Palette"),
+                )
                 .style(Style::default().fg(Color::LightCyan)),
             get_overlay_rect(frame.size(), 10),
         ),
@@ -187,7 +168,7 @@ fn render_overlay_layout(
     }
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+fn setup_terminal() -> CrosstermResult<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().unwrap();
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     terminal.backend_mut().queue(EnableMouseCapture)?;
@@ -197,7 +178,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     Ok(terminal)
 }
 
-fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResult<()> {
     terminal.backend_mut().queue(DisableMouseCapture)?;
     terminal.backend_mut().queue(LeaveAlternateScreen)?;
     terminal.backend_mut().flush()?;
@@ -206,7 +187,7 @@ fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-fn cleanup_terminal_force() -> Result<()> {
+fn cleanup_terminal_force() -> CrosstermResult<()> {
     cleanup_terminal(&mut Terminal::new(CrosstermBackend::new(stdout()))?)
 }
 
@@ -239,87 +220,96 @@ impl FrameDuration {
     }
 }
 
-fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<String> {
+fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResult<String> {
     use std::collections::VecDeque;
 
     // Setup event listeners
     let args = NaluArgs::parse();
+    let mut tui = get_tui().unwrap();
+    let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
     let (tx_input, rx_input) = unbounded();
     spawn_input_listener(tx_input);
-
-    let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
 
     let mut durations: VecDeque<FrameDuration> = VecDeque::new();
 
     loop {
         let mut frame_duration = FrameDuration::new();
-
         let frame_start = Instant::now();
 
-        let mut browser_rect = Rect::new(0, 0, 0, 0);
-        let mut list_rect = Rect::new(0, 0, 0, 0);
-        let mut viewer_rect = Rect::new(0, 0, 0, 0);
-        let mut filter_rect = Rect::new(0, 0, 0, 0);
-
         terminal.draw(|frame| {
-            // Resolve layout
-            let main_rects = get_main_layout().split(frame.size());
-            nalu_state
-                .get_resize_mut()
-                .resize_container(main_rects[1].width);
-            let waveform_layout = nalu_state
-                .get_resize()
-                .constrain_layout(get_waveform_layout());
-            let waveform_rects = waveform_layout.split(main_rects[1]);
-            let browser_filter_rects = get_browser_layout().split(waveform_rects[0]);
-
-            browser_rect = browser_filter_rects[0];
-            filter_rect = browser_filter_rects[1];
-            list_rect = waveform_rects[1];
-            viewer_rect = waveform_rects[2];
-
-            frame_duration.timestamp(String::from("size_rects"));
-
-            render_main_layout(
-                frame,
-                &nalu_state,
-                main_rects[0],
-                browser_rect,
-                filter_rect,
-                list_rect,
-                viewer_rect,
-                &mut frame_duration,
+            tui.as_base_mut().invalidate();
+            if let Err(err) = tui
+                .as_base_mut()
+                .resize(frame.size().width, frame.size().height)
+            {
+                panic!("Resizing Error! ({err:?})");
+            }
+            frame.render_stateful_widget(
+                ComponentBaseWidget::from(tui.as_base_mut()),
+                frame.size(),
+                &mut (),
             );
             render_overlay_layout(frame, &nalu_state);
-            frame_duration.timestamp(String::from("draw_overlay"));
         })?;
-
-        nalu_state.handle_vcd();
-        frame_duration.timestamp(String::from("vcd"));
-        nalu_state.get_netlist_state_mut().set_size(&browser_rect);
-        nalu_state.get_signal_state_mut().set_size(&list_rect, 1);
-        nalu_state
-            .get_waveform_state_mut()
-            .set_size(&viewer_rect, 1);
-        frame_duration.timestamp(String::from("size"));
+        frame_duration.timestamp(String::from("draw"));
 
         while !rx_input.is_empty() {
             match rx_input.recv().unwrap() {
-                CrosstermEvent::Key(key) => nalu_state.handle_key(key),
-                CrosstermEvent::Mouse(event) => nalu_state.handle_mouse(
-                    event.column,
-                    event.row,
-                    event.kind,
-                    NaluSizing::new(browser_rect, list_rect, viewer_rect, filter_rect),
-                ),
+                CrosstermEvent::Key(key) => {
+                    if let Some(key) = nalu_state.handle_key(key) {
+                        tui.as_base_mut().handle_key(key);
+                    }
+                }
+                CrosstermEvent::Mouse(event) => {
+                    if let Some((x, y, kind)) =
+                        nalu_state.handle_mouse(event.column, event.row, event.kind)
+                    {
+                        tui.as_base_mut().handle_mouse(x, y, Some(kind));
+                    }
+                }
                 CrosstermEvent::Resize(_, _)
                 | CrosstermEvent::FocusGained
                 | CrosstermEvent::FocusLost
                 | CrosstermEvent::Paste(_) => {}
             }
         }
-        nalu_state.handle_requests();
         frame_duration.timestamp(String::from("input"));
+
+        // Handle requests between components
+        let netlist_viewer_requests = tui
+            .as_container_mut()
+            .search_name_widget_mut::<NetlistViewerState>("main.netlist_main.netlist")
+            .unwrap()
+            .get_requests();
+        let signal_viewer_requests = tui
+            .as_container_mut()
+            .search_name_widget_mut::<SignalViewerState>("main.signal")
+            .unwrap()
+            .get_requests();
+        let waveform_viewer_requests = tui
+            .as_container_mut()
+            .search_name_widget_mut::<WaveformViewerState>("main.waveform")
+            .unwrap()
+            .get_requests();
+
+        for request in waveform_viewer_requests {
+            tui.as_container_mut()
+                .search_name_widget_mut::<SignalViewerState>("main.signal")
+                .unwrap()
+                .handle_key_press(request.0);
+        }
+        tui.as_container_mut()
+            .search_name_widget_mut::<SignalViewerState>("main.signal")
+            .unwrap()
+            .browser_request(netlist_viewer_requests);
+        tui.as_container_mut()
+            .search_name_widget_mut::<WaveformViewerState>("main.waveform")
+            .unwrap()
+            .signal_request(signal_viewer_requests);
+        frame_duration.timestamp(String::from("requests"));
+
+        nalu_state.handle_vcd(&mut tui);
+        frame_duration.timestamp(String::from("vcd"));
 
         if let Some(msg) = nalu_state.get_done() {
             cleanup_terminal(terminal)?;
@@ -354,7 +344,7 @@ thread_local! {
     static BACKTRACE: RefCell<Option<Backtrace>> = RefCell::new(None);
 }
 
-fn main() -> Result<()> {
+fn main() -> CrosstermResult<()> {
     if !stdout().is_tty() {
         println!("Error: Cannot open viewer when not TTY!");
         return Ok(());
