@@ -10,8 +10,8 @@ use tui_layout::component::ComponentWidget;
 use waveform_db::{bitvector::BitVector, Waveform, WaveformSignalResult};
 
 use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
-use crate::widgets::signal::*;
 use crate::widgets::timescale::*;
+use crate::widgets::waveform::*;
 
 pub struct WaveformViewerRequest(pub KeyEvent);
 
@@ -73,11 +73,11 @@ impl WaveformViewerState {
         }
     }
 
-    pub fn get_waveform_widget<'a>(&'a self) -> WaveformWidget<'a> {
+    pub fn get_waveform_widget<'a>(&'a self) -> WaveformViewerWidget<'a> {
         let mut signal_widgets = Vec::new();
         for signal_entry in &self.signal_entries {
             if let Some(signal_entry) = signal_entry {
-                signal_widgets.push(Some(Signal::new(
+                signal_widgets.push(Some(WaveformWidget::new(
                     &self.timescale_state,
                     WaveformEntry {
                         storage: &self.waveform,
@@ -91,7 +91,7 @@ impl WaveformViewerState {
                 signal_widgets.push(None);
             }
         }
-        WaveformWidget {
+        WaveformViewerWidget {
             timescale_widget: Timescale::new(&self.timescale_state),
             signal_widgets,
             block: None,
@@ -153,8 +153,8 @@ impl<'a> WaveformEntry<'a> {
     }
 }
 
-impl<'a> SignalStorage for WaveformEntry<'a> {
-    fn get_value(&self, timestamp_index: usize) -> Option<(usize, SignalValue)> {
+impl<'a> WaveformStorage for WaveformEntry<'a> {
+    fn get_value(&self, timestamp_index: usize) -> Option<(usize, WaveformValue)> {
         match self.storage.get_signal(self.idcode) {
             WaveformSignalResult::Vector(signal) => {
                 if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
@@ -165,7 +165,7 @@ impl<'a> SignalStorage for WaveformEntry<'a> {
                     } else {
                         bv
                     };
-                    Some((pos.get_timestamp_index(), SignalValue::Vector(bv)))
+                    Some((pos.get_timestamp_index(), WaveformValue::Vector(bv)))
                 } else {
                     None
                 }
@@ -174,7 +174,7 @@ impl<'a> SignalStorage for WaveformEntry<'a> {
                 if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
                     let pos = pos.get_index();
                     let r = signal.get_real(pos.get_value_index());
-                    Some((pos.get_timestamp_index(), SignalValue::Real(r)))
+                    Some((pos.get_timestamp_index(), WaveformValue::Real(r)))
                 } else {
                     None
                 }
@@ -204,16 +204,16 @@ impl<'a> SignalStorage for WaveformEntry<'a> {
     }
 }
 
-pub struct WaveformWidget<'a> {
+pub struct WaveformViewerWidget<'a> {
     timescale_widget: Timescale<'a>,
-    signal_widgets: Vec<Option<Signal<'a, WaveformEntry<'a>>>>,
+    signal_widgets: Vec<Option<WaveformWidget<'a, WaveformEntry<'a>>>>,
     /// A block to wrap the widget in
     block: Option<Block<'a>>,
     /// Widget style
     style: Style,
 }
 
-impl<'a> WaveformWidget<'a> {
+impl<'a> WaveformViewerWidget<'a> {
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
@@ -225,7 +225,7 @@ impl<'a> WaveformWidget<'a> {
     }
 }
 
-impl<'a> Widget for WaveformWidget<'a> {
+impl<'a> Widget for WaveformViewerWidget<'a> {
     fn render(mut self, area: Rect, buf: &mut Buffer) {
         buf.set_style(area, self.style);
         let area = match self.block.take() {

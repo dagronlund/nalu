@@ -13,12 +13,12 @@ use tui::{
 use super::timescale::TimescaleState;
 
 #[derive(Clone, Debug)]
-pub enum SignalValue {
+pub enum WaveformValue {
     Vector(BitVector),
     Real(f64),
 }
 
-impl SignalValue {
+impl WaveformValue {
     pub fn is_unknown(&self) -> bool {
         match self {
             Self::Vector(bv) => bv.is_unknown(),
@@ -34,10 +34,10 @@ impl SignalValue {
     }
 }
 
-pub trait SignalStorage {
+pub trait WaveformStorage {
     /// Returns the value at or immediately before the given timestamp and its
     /// timestamp index
-    fn get_value(&self, timestamp_index: usize) -> Option<(usize, SignalValue)>;
+    fn get_value(&self, timestamp_index: usize) -> Option<(usize, WaveformValue)>;
 
     /// Binary search for the index of the requested timestamp, or if not
     /// found the timestamp immediately before it
@@ -58,7 +58,7 @@ pub trait SignalStorage {
     fn get_timestamps(&self) -> &Vec<u64>;
 }
 
-pub struct Signal<'a, S> {
+pub struct WaveformWidget<'a, S> {
     /// The timescale range and cursor position to render
     state: &'a TimescaleState,
     /// The signal values across time to render
@@ -69,7 +69,7 @@ pub struct Signal<'a, S> {
     selected: bool,
 }
 
-impl<'a, S> Signal<'a, S> {
+impl<'a, S> WaveformWidget<'a, S> {
     pub fn new(
         state: &'a TimescaleState,
         storage: S,
@@ -86,15 +86,15 @@ impl<'a, S> Signal<'a, S> {
 }
 
 #[derive(Clone, Debug)]
-enum SignalQuery {
-    SingleEdge(usize, SignalValue, usize),
+enum WaveformQuery {
+    SingleEdge(usize, WaveformValue, usize),
     MultipleEdge(usize),
-    Static(SignalValue, usize),
-    StaticVoid(SignalValue, usize),
+    Static(WaveformValue, usize),
+    StaticVoid(WaveformValue, usize),
     None(usize),
 }
 
-impl SignalQuery {
+impl WaveformQuery {
     fn get_span(&self, radix: BitVectorRadix, _is_selected: bool) -> (String, Style) {
         let (value, width, is_void, is_delta) = match self {
             Self::Static(value, width) => (value, width, false, false),
@@ -125,7 +125,7 @@ impl SignalQuery {
         };
 
         let raw = match value {
-            SignalValue::Vector(bv) => {
+            WaveformValue::Vector(bv) => {
                 if bv.get_bit_width() <= 1 {
                     match bv.get_bit(0) {
                         Logic::Zero => format!("_").repeat(*width),
@@ -141,7 +141,7 @@ impl SignalQuery {
                     }
                 }
             }
-            SignalValue::Real(f) => {
+            WaveformValue::Real(f) => {
                 if is_delta {
                     format!("|{}", f)
                 } else {
@@ -167,11 +167,11 @@ impl SignalQuery {
     }
 }
 
-impl<'a, S> Signal<'a, S>
+impl<'a, S> WaveformWidget<'a, S>
 where
-    S: SignalStorage,
+    S: WaveformStorage,
 {
-    fn get_query(&self, timestamp_range: Range<u64>) -> SignalQuery {
+    fn get_query(&self, timestamp_range: Range<u64>) -> WaveformQuery {
         // Find the timestamp indices that are contained by the timestamp range
         let timestamp_index_range = if let Some(range) = self
             .storage
@@ -179,42 +179,42 @@ where
         {
             range
         } else {
-            return SignalQuery::None(1);
+            return WaveformQuery::None(1);
         };
         // Check if there is a value available
         let (timestamp_index, value) =
             if let Some(iv) = self.storage.get_value(timestamp_index_range.end) {
                 iv
             } else {
-                return SignalQuery::None(1);
+                return WaveformQuery::None(1);
             };
         if timestamp_index < timestamp_index_range.start {
             // Value changed before range
-            return SignalQuery::Static(value, 1);
+            return WaveformQuery::Static(value, 1);
         }
         if timestamp_range.start >= self.state.get_timestamp_max() {
             // Range starts in void time
-            return SignalQuery::StaticVoid(value, 1);
+            return WaveformQuery::StaticVoid(value, 1);
         }
         if timestamp_index == 0 {
             // First timestamp index, nothing before
-            return SignalQuery::SingleEdge(timestamp_index, value, 1);
+            return WaveformQuery::SingleEdge(timestamp_index, value, 1);
         }
         if let Some((timestamp_index_next, _)) = self.storage.get_value(timestamp_index - 1) {
             if timestamp_index_next >= timestamp_index_range.start {
-                SignalQuery::MultipleEdge(1)
+                WaveformQuery::MultipleEdge(1)
             } else {
-                SignalQuery::SingleEdge(timestamp_index, value, 1)
+                WaveformQuery::SingleEdge(timestamp_index, value, 1)
             }
         } else {
-            SignalQuery::SingleEdge(timestamp_index, value, 1)
+            WaveformQuery::SingleEdge(timestamp_index, value, 1)
         }
     }
 }
 
-impl<'a, S> Widget for Signal<'a, S>
+impl<'a, S> Widget for WaveformWidget<'a, S>
 where
-    S: SignalStorage,
+    S: WaveformStorage,
 {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let timestamp_width = self.state.get_range().end - self.state.get_range().start;
@@ -231,10 +231,10 @@ where
                 let query = self.get_query(range.clone());
                 query
             })
-            .collect::<Vec<SignalQuery>>();
+            .collect::<Vec<WaveformQuery>>();
 
         // Merge queries together when possible
-        let mut queries_compressed: Vec<SignalQuery> = Vec::with_capacity(queries.len());
+        let mut queries_compressed: Vec<WaveformQuery> = Vec::with_capacity(queries.len());
         for query in queries.into_iter() {
             let query_last = if let Some(query_last) = queries_compressed.pop() {
                 query_last
@@ -243,22 +243,23 @@ where
                 continue;
             };
             let query = match (&query_last, query) {
-                (SignalQuery::None(width_last), SignalQuery::None(width)) => {
-                    SignalQuery::None(width_last + width)
+                (WaveformQuery::None(width_last), WaveformQuery::None(width)) => {
+                    WaveformQuery::None(width_last + width)
                 }
-                (SignalQuery::MultipleEdge(width_last), SignalQuery::MultipleEdge(width)) => {
-                    SignalQuery::MultipleEdge(width_last + width)
+                (WaveformQuery::MultipleEdge(width_last), WaveformQuery::MultipleEdge(width)) => {
+                    WaveformQuery::MultipleEdge(width_last + width)
                 }
-                (SignalQuery::Static(_, width_last), SignalQuery::Static(value, width)) => {
-                    SignalQuery::Static(value, width_last + width)
+                (WaveformQuery::Static(_, width_last), WaveformQuery::Static(value, width)) => {
+                    WaveformQuery::Static(value, width_last + width)
                 }
                 (
-                    SignalQuery::SingleEdge(timestamp_index, _, width_last),
-                    SignalQuery::Static(value, width),
-                ) => SignalQuery::SingleEdge(*timestamp_index, value, width_last + width),
-                (SignalQuery::StaticVoid(_, width_last), SignalQuery::StaticVoid(value, width)) => {
-                    SignalQuery::StaticVoid(value, width_last + width)
-                }
+                    WaveformQuery::SingleEdge(timestamp_index, _, width_last),
+                    WaveformQuery::Static(value, width),
+                ) => WaveformQuery::SingleEdge(*timestamp_index, value, width_last + width),
+                (
+                    WaveformQuery::StaticVoid(_, width_last),
+                    WaveformQuery::StaticVoid(value, width),
+                ) => WaveformQuery::StaticVoid(value, width_last + width),
                 (query_last, query) => {
                     queries_compressed.push((*query_last).clone());
                     query
@@ -355,7 +356,7 @@ fn signal_render_test() {
 
     let rect = Rect::new(0, 0, 50, 1);
     let mut buffer = Buffer::empty(rect.clone());
-    Signal::new(
+    WaveformWidget::new(
         &timescale_state,
         WaveformEntry::new(&waveform, idcode, None),
         BitVectorRadix::Hexadecimal,
@@ -369,7 +370,7 @@ fn signal_render_test() {
 
     let rect = Rect::new(0, 0, 100, 1);
     let mut buffer = Buffer::empty(rect.clone());
-    Signal::new(
+    WaveformWidget::new(
         &timescale_state,
         WaveformEntry::new(&waveform, idcode, None),
         BitVectorRadix::Hexadecimal,
@@ -389,7 +390,7 @@ fn signal_render_test() {
 
     let rect = Rect::new(0, 0, 400, 1);
     let mut buffer = Buffer::empty(rect.clone());
-    Signal::new(
+    WaveformWidget::new(
         &timescale_state,
         WaveformEntry::new(&waveform, idcode, None),
         BitVectorRadix::Hexadecimal,
@@ -405,7 +406,7 @@ fn signal_render_test() {
 
     let rect = Rect::new(0, 0, 400, 1);
     let mut buffer = Buffer::empty(rect.clone());
-    Signal::new(
+    WaveformWidget::new(
         &timescale_state,
         WaveformEntry::new(&waveform, idcode, None),
         BitVectorRadix::Hexadecimal,
@@ -430,7 +431,7 @@ fn signal_render_test() {
 
     let rect = Rect::new(0, 0, 400, 1);
     let mut buffer = Buffer::empty(rect.clone());
-    Signal::new(
+    WaveformWidget::new(
         &timescale_state,
         WaveformEntry::new(&waveform, idcode, None),
         BitVectorRadix::Hexadecimal,
