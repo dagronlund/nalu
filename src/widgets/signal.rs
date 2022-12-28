@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use vcd_parser::waveform::bitvector::{BitVector, BitVectorRadix, Logic};
+use waveform_db::bitvector::{BitVector, BitVectorRadix, Logic};
 
 use tui::{
     buffer::Buffer,
@@ -284,7 +284,7 @@ where
 fn signal_render_test() {
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use vcd_parser::waveform::*;
+    use waveform_db::*;
 
     use crate::state::waveform_viewer::*;
 

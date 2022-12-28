@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
 use tui_layout::container::{search::ContainerSearch, Container};
 use vcd_parser::parser::VcdHeader;
 use vcd_parser::utils::*;
-use vcd_parser::waveform::Waveform;
+use waveform_db::Waveform;
 
 use crate::state::{netlist_viewer::NetlistViewerState, waveform_viewer::WaveformViewerState};
 

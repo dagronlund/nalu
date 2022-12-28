@@ -7,7 +7,7 @@ use tui::{
 };
 use tui_layout::component::ComponentWidget;
 
-use vcd_parser::waveform::{bitvector::BitVector, Waveform, WaveformSignalResult};
+use waveform_db::{bitvector::BitVector, Waveform, WaveformSignalResult};
 
 use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
 use crate::widgets::signal::*;

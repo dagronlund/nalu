@@ -8,7 +8,7 @@ use tui::{
 use tui_layout::component::ComponentWidget;
 
 use vcd_parser::parser::VcdVariable;
-use vcd_parser::waveform::bitvector::BitVectorRadix;
+use waveform_db::bitvector::BitVectorRadix;
 
 use crate::state::netlist_viewer::NetlistViewerRequest;
 use crate::widgets::browser::*;
