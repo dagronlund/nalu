@@ -1,3 +1,4 @@
+pub mod pyo3_bindings;
 pub mod state;
 pub mod widgets;
 

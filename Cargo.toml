@@ -21,3 +21,7 @@ byte_storage = { path = "../byte_storage" }
 crossbeam_helper = { path = "../crossbeam_helper" }
 vcd_parser = { path = "../vcd_parser" }
 tui_layout = { path = "../tui_layout" }
+
+[dependencies.pyo3]
+version = "0.17.3"
+features = ["auto-initialize"]
