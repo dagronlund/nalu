@@ -7,7 +7,7 @@ use tui::{
 };
 use tui_layout::component::ComponentWidget;
 
-use waveform_db::{bitvector::BitVector, Waveform, WaveformSignalResult};
+use waveform_db::Waveform;
 
 use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
 use crate::widgets::timescale::*;
@@ -79,11 +79,9 @@ impl WaveformViewerState {
             if let Some(signal_entry) = signal_entry {
                 signal_widgets.push(Some(WaveformWidget::new(
                     &self.timescale_state,
-                    WaveformEntry {
-                        storage: &self.waveform,
-                        idcode: signal_entry.idcode,
-                        index: signal_entry.index,
-                    },
+                    &self.waveform,
+                    signal_entry.idcode,
+                    signal_entry.index,
                     signal_entry.radix,
                     signal_entry.is_selected,
                 )));
@@ -137,76 +135,9 @@ impl WaveformViewerState {
     }
 }
 
-pub struct WaveformEntry<'a> {
-    storage: &'a Waveform,
-    idcode: usize,
-    index: Option<usize>,
-}
-
-impl<'a> WaveformEntry<'a> {
-    pub fn new(storage: &'a Waveform, idcode: usize, index: Option<usize>) -> Self {
-        Self {
-            storage,
-            idcode,
-            index,
-        }
-    }
-}
-
-impl<'a> WaveformStorage for WaveformEntry<'a> {
-    fn get_value(&self, timestamp_index: usize) -> Option<(usize, WaveformValue)> {
-        match self.storage.get_signal(self.idcode) {
-            WaveformSignalResult::Vector(signal) => {
-                if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
-                    let pos = pos.get_index();
-                    let bv = signal.get_bitvector(pos.get_value_index());
-                    let bv = if let Some(index) = self.index {
-                        BitVector::from(bv.get_bit(index))
-                    } else {
-                        bv
-                    };
-                    Some((pos.get_timestamp_index(), WaveformValue::Vector(bv)))
-                } else {
-                    None
-                }
-            }
-            WaveformSignalResult::Real(signal) => {
-                if let Some(pos) = signal.get_history().search_timestamp_index(timestamp_index) {
-                    let pos = pos.get_index();
-                    let r = signal.get_real(pos.get_value_index());
-                    Some((pos.get_timestamp_index(), WaveformValue::Real(r)))
-                } else {
-                    None
-                }
-            }
-            WaveformSignalResult::None => None,
-        }
-    }
-
-    fn search_timestamp(&self, timestamp: u64) -> Option<usize> {
-        self.storage.search_timestamp(timestamp)
-    }
-
-    fn search_timestamp_after(&self, timestamp: u64) -> Option<usize> {
-        self.storage.search_timestamp_after(timestamp)
-    }
-
-    fn search_timestamp_range(
-        &self,
-        timestamp_range: std::ops::Range<u64>,
-        greedy: bool,
-    ) -> Option<std::ops::Range<usize>> {
-        self.storage.search_timestamp_range(timestamp_range, greedy)
-    }
-
-    fn get_timestamps(&self) -> &Vec<u64> {
-        self.storage.get_timestamps()
-    }
-}
-
 pub struct WaveformViewerWidget<'a> {
     timescale_widget: Timescale<'a>,
-    signal_widgets: Vec<Option<WaveformWidget<'a, WaveformEntry<'a>>>>,
+    signal_widgets: Vec<Option<WaveformWidget<'a>>>,
     /// A block to wrap the widget in
     block: Option<Block<'a>>,
     /// Widget style

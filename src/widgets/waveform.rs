@@ -1,6 +1,7 @@
 use std::ops::Range;
 
-use waveform_db::bitvector::{BitVector, BitVectorRadix, Logic};
+use waveform_db::bitvector::{BitVectorRadix, Logic};
+use waveform_db::{Waveform, WaveformValueResult};
 
 use tui::{
     buffer::Buffer,
@@ -12,85 +13,47 @@ use tui::{
 
 use super::timescale::TimescaleState;
 
-#[derive(Clone, Debug)]
-pub enum WaveformValue {
-    Vector(BitVector),
-    Real(f64),
-}
-
-impl WaveformValue {
-    pub fn is_unknown(&self) -> bool {
-        match self {
-            Self::Vector(bv) => bv.is_unknown(),
-            Self::Real(_) => false,
-        }
-    }
-
-    pub fn is_high_impedance(&self) -> bool {
-        match self {
-            Self::Vector(bv) => bv.is_high_impedance(),
-            Self::Real(_) => false,
-        }
-    }
-}
-
-pub trait WaveformStorage {
-    /// Returns the value at or immediately before the given timestamp and its
-    /// timestamp index
-    fn get_value(&self, timestamp_index: usize) -> Option<(usize, WaveformValue)>;
-
-    /// Binary search for the index of the requested timestamp, or if not
-    /// found the timestamp immediately before it
-    fn search_timestamp(&self, timestamp: u64) -> Option<usize>;
-
-    /// Binary search for the index of the requested timestamp, or if not
-    /// found the timestamp immediately after it
-    fn search_timestamp_after(&self, timestamp: u64) -> Option<usize>;
-
-    /// Returns the range of timestamp indices that either contains the given
-    /// timestamps (greedy) or is contained by the given timestamps (non-greedy)
-    fn search_timestamp_range(
-        &self,
-        timestamp_range: std::ops::Range<u64>,
-        greedy: bool,
-    ) -> Option<std::ops::Range<usize>>;
-
-    fn get_timestamps(&self) -> &Vec<u64>;
-}
-
-pub struct WaveformWidget<'a, S> {
+pub struct WaveformWidget<'a> {
     /// The timescale range and cursor position to render
-    state: &'a TimescaleState,
-    /// The signal values across time to render
-    storage: S,
+    timescale_state: &'a TimescaleState,
+    /// The waveform container to query
+    waveform: &'a Waveform,
+    /// The idcode of the signal to render
+    idcode: usize,
+    /// Optionally what bit-index of a multi-bit vector to render
+    bit_index: Option<usize>,
     /// How to render the signal values
     radix: BitVectorRadix,
     /// If the signal itself is selected
-    selected: bool,
+    is_selected: bool,
 }
 
-impl<'a, S> WaveformWidget<'a, S> {
+impl<'a> WaveformWidget<'a> {
     pub fn new(
-        state: &'a TimescaleState,
-        storage: S,
+        timescale_state: &'a TimescaleState,
+        waveform: &'a Waveform,
+        idcode: usize,
+        bit_index: Option<usize>,
         radix: BitVectorRadix,
-        selected: bool,
+        is_selected: bool,
     ) -> Self {
         Self {
-            state,
-            storage,
+            timescale_state,
+            waveform,
+            idcode,
+            bit_index,
             radix,
-            selected,
+            is_selected,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 enum WaveformQuery {
-    SingleEdge(usize, WaveformValue, usize),
+    SingleEdge(WaveformValueResult, usize),
     MultipleEdge(usize),
-    Static(WaveformValue, usize),
-    StaticVoid(WaveformValue, usize),
+    Static(WaveformValueResult, usize),
+    StaticVoid(WaveformValueResult, usize),
     None(usize),
 }
 
@@ -99,7 +62,7 @@ impl WaveformQuery {
         let (value, width, is_void, is_delta) = match self {
             Self::Static(value, width) => (value, width, false, false),
             Self::StaticVoid(value, width) => (value, width, true, false),
-            Self::SingleEdge(_, value, width) => (value, width, false, true),
+            Self::SingleEdge(value, width) => (value, width, false, true),
             Self::MultipleEdge(width) => {
                 return (
                     format!("#").repeat(*width),
@@ -125,7 +88,7 @@ impl WaveformQuery {
         };
 
         let raw = match value {
-            WaveformValue::Vector(bv) => {
+            WaveformValueResult::Vector(bv, _) => {
                 if bv.get_bit_width() <= 1 {
                     match bv.get_bit(0) {
                         Logic::Zero => format!("_").repeat(*width),
@@ -141,7 +104,7 @@ impl WaveformQuery {
                     }
                 }
             }
-            WaveformValue::Real(f) => {
+            WaveformValueResult::Real(f, _) => {
                 if is_delta {
                     format!("|{}", f)
                 } else {
@@ -167,57 +130,53 @@ impl WaveformQuery {
     }
 }
 
-impl<'a, S> WaveformWidget<'a, S>
-where
-    S: WaveformStorage,
-{
+impl<'a> WaveformWidget<'a> {
     fn get_query(&self, timestamp_range: Range<u64>) -> WaveformQuery {
         // Find the timestamp indices that are contained by the timestamp range
-        let timestamp_index_range = if let Some(range) = self
-            .storage
-            .search_timestamp_range(timestamp_range.clone(), false)
-        {
-            range
-        } else {
+        let Some(timestamp_index_range) = self
+            .waveform
+            .search_timestamp_range(timestamp_range.clone(), false) else {
             return WaveformQuery::None(1);
         };
         // Check if there is a value available
-        let (timestamp_index, value) =
-            if let Some(iv) = self.storage.get_value(timestamp_index_range.end) {
-                iv
-            } else {
-                return WaveformQuery::None(1);
-            };
-        if timestamp_index < timestamp_index_range.start {
+        let Some(result) = self.waveform.search_value_bit_index(
+            self.idcode,
+            timestamp_index_range.end,
+            self.bit_index,
+        ) else {
+            return WaveformQuery::None(1);
+        };
+        if result.get_timestamp_index() < timestamp_index_range.start {
             // Value changed before range
-            return WaveformQuery::Static(value, 1);
+            return WaveformQuery::Static(result, 1);
         }
-        if timestamp_range.start >= self.state.get_timestamp_max() {
+        if timestamp_range.start >= self.timescale_state.get_timestamp_max() {
             // Range starts in void time
-            return WaveformQuery::StaticVoid(value, 1);
+            return WaveformQuery::StaticVoid(result, 1);
         }
-        if timestamp_index == 0 {
+        if result.get_timestamp_index() == 0 {
             // First timestamp index, nothing before
-            return WaveformQuery::SingleEdge(timestamp_index, value, 1);
+            return WaveformQuery::SingleEdge(result, 1);
         }
-        if let Some((timestamp_index_next, _)) = self.storage.get_value(timestamp_index - 1) {
-            if timestamp_index_next >= timestamp_index_range.start {
-                WaveformQuery::MultipleEdge(1)
-            } else {
-                WaveformQuery::SingleEdge(timestamp_index, value, 1)
-            }
+        let Some(result_before) = self.waveform.search_value_bit_index(
+            self.idcode, 
+            result.get_timestamp_index() - 1, 
+            self.bit_index
+        ) else {
+                return WaveformQuery::SingleEdge(result, 1);
+        };
+        if result_before.get_timestamp_index() >= timestamp_index_range.start {
+            WaveformQuery::MultipleEdge(1)
         } else {
-            WaveformQuery::SingleEdge(timestamp_index, value, 1)
+            WaveformQuery::SingleEdge(result, 1)
         }
     }
 }
 
-impl<'a, S> Widget for WaveformWidget<'a, S>
-where
-    S: WaveformStorage,
-{
+impl<'a> Widget for WaveformWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let timestamp_width = self.state.get_range().end - self.state.get_range().start;
+        let timestamp_width =
+            self.timescale_state.get_range().end - self.timescale_state.get_range().start;
         // Create list of queries, one for each character on the screen
         let queries = (0..area.width as u64)
             .map(|i| {
@@ -225,7 +184,8 @@ where
                     ..((i + 1) * timestamp_width / area.width as u64)
             })
             .map(|range| {
-                range.start + self.state.get_range().start..range.end + self.state.get_range().start
+                range.start + self.timescale_state.get_range().start
+                    ..range.end + self.timescale_state.get_range().start
             })
             .map(|range| {
                 let query = self.get_query(range.clone());
@@ -252,10 +212,9 @@ where
                 (WaveformQuery::Static(_, width_last), WaveformQuery::Static(value, width)) => {
                     WaveformQuery::Static(value, width_last + width)
                 }
-                (
-                    WaveformQuery::SingleEdge(timestamp_index, _, width_last),
-                    WaveformQuery::Static(value, width),
-                ) => WaveformQuery::SingleEdge(*timestamp_index, value, width_last + width),
+                (WaveformQuery::SingleEdge(value, width_last), WaveformQuery::Static(_, width)) => {
+                    WaveformQuery::SingleEdge(value.clone(), width_last + width)
+                }
                 (
                     WaveformQuery::StaticVoid(_, width_last),
                     WaveformQuery::StaticVoid(value, width),
@@ -271,7 +230,7 @@ where
         // Render queries into a set of styled spans
         let mut spans = Vec::new();
         for query in queries_compressed {
-            let (string, style) = query.get_span(self.radix, self.selected);
+            let (string, style) = query.get_span(self.radix, self.is_selected);
             spans.push(Span::styled(string, style));
         }
 
@@ -286,8 +245,6 @@ fn signal_render_test() {
     use std::sync::{Arc, Mutex};
     use std::thread;
     use waveform_db::*;
-
-    use crate::state::waveform_viewer::*;
 
     let fname = "res/gecko.vcd";
 
@@ -308,7 +265,7 @@ fn signal_render_test() {
 
     let idcode = header.get_variable("TOP.clk").unwrap().get_idcode();
     let signal = match waveform.get_signal(idcode) {
-        WaveformSignalResult::Vector(signal) => signal,
+        Some(WaveformSignalResult::Vector(signal)) => signal,
         _ => panic!("Cannot find vector signal!"),
     };
 
@@ -358,7 +315,9 @@ fn signal_render_test() {
     let mut buffer = Buffer::empty(rect.clone());
     WaveformWidget::new(
         &timescale_state,
-        WaveformEntry::new(&waveform, idcode, None),
+        &waveform,
+        idcode,
+        None,
         BitVectorRadix::Hexadecimal,
         false,
     )
@@ -372,7 +331,9 @@ fn signal_render_test() {
     let mut buffer = Buffer::empty(rect.clone());
     WaveformWidget::new(
         &timescale_state,
-        WaveformEntry::new(&waveform, idcode, None),
+        &waveform,
+        idcode,
+        None,
         BitVectorRadix::Hexadecimal,
         false,
     )
@@ -392,7 +353,9 @@ fn signal_render_test() {
     let mut buffer = Buffer::empty(rect.clone());
     WaveformWidget::new(
         &timescale_state,
-        WaveformEntry::new(&waveform, idcode, None),
+        &waveform,
+        idcode,
+        None,
         BitVectorRadix::Hexadecimal,
         false,
     )
@@ -408,7 +371,9 @@ fn signal_render_test() {
     let mut buffer = Buffer::empty(rect.clone());
     WaveformWidget::new(
         &timescale_state,
-        WaveformEntry::new(&waveform, idcode, None),
+        &waveform,
+        idcode,
+        None,
         BitVectorRadix::Hexadecimal,
         false,
     )
@@ -433,7 +398,9 @@ fn signal_render_test() {
     let mut buffer = Buffer::empty(rect.clone());
     WaveformWidget::new(
         &timescale_state,
-        WaveformEntry::new(&waveform, idcode, None),
+        &waveform,
+        idcode,
+        None,
         BitVectorRadix::Hexadecimal,
         false,
     )
