@@ -7,6 +7,7 @@ description = "A fast command line tool for viewing and verifying VCD waveform f
 [dependencies]
 crossbeam = "0.8.1"
 bytes = "1.1.0"
+num-bigint = "0.4.3" # TODO: Replace with native BitVector-python conversion
 log = "0.4.0"
 simple_logger = "1.11.0"
 humansize = "1.1.1"
@@ -25,4 +26,4 @@ tui_layout = { path = "../tui_layout" }
 
 [dependencies.pyo3]
 version = "0.17.3"
-features = ["auto-initialize"]
+features = ["auto-initialize", "num-bigint"]

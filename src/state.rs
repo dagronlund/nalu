@@ -144,7 +144,7 @@ impl NaluState {
             .search_name_widget_mut::<WaveformViewerState>("main.waveform")
             .unwrap()
             .load_waveform(
-                waveform,
+                Arc::new(waveform),
                 match timescale {
                     Some(timescale) => *timescale,
                     None => 0,

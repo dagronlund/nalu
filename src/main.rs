@@ -1,9 +1,10 @@
-pub mod pyo3_bindings;
+pub mod python;
 pub mod state;
 pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 use std::time::{self, Duration, Instant};
 
@@ -27,6 +28,7 @@ use tui_layout::{
     container::{list::ContainerList, search::ContainerSearch, Container},
     ResizeError,
 };
+use waveform_db::Waveform;
 
 use crate::state::netlist_viewer::NetlistViewerState;
 use crate::state::signal_viewer::SignalViewerState;
@@ -73,7 +75,7 @@ fn get_tui() -> Result<Box<dyn Container>, ResizeError> {
     main.add_component(Component::new(
         "waveform".to_string(),
         1,
-        Box::new(WaveformViewerState::new()),
+        Box::new(WaveformViewerState::new(Arc::new(Waveform::new()))),
     ))?;
 
     let mut nalu = ContainerList::new("nalu".to_string(), Direction::Vertical, false, 0, 0);

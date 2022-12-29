@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
 use tui::{
     buffer::Buffer,
@@ -17,25 +19,25 @@ pub struct WaveformViewerRequest(pub KeyEvent);
 
 pub struct WaveformViewerState {
     width: usize,
-    waveform: Waveform,
+    waveform: Arc<Waveform>,
     timescale_state: TimescaleState,
     signal_entries: Vec<Option<SignalViewerEntry>>,
     requests: Vec<WaveformViewerRequest>,
 }
 
 impl WaveformViewerState {
-    pub fn new() -> Self {
+    pub fn new(waveform: Arc<Waveform>) -> Self {
         Self {
             width: 0,
-            waveform: Waveform::new(),
+            waveform: waveform.clone(),
             timescale_state: TimescaleState::new(),
             signal_entries: Vec::new(),
             requests: Vec::new(),
         }
     }
 
-    pub fn load_waveform(&mut self, waveform: Waveform, timescale: i32) {
-        self.waveform = waveform;
+    pub fn load_waveform(&mut self, waveform: Arc<Waveform>, timescale: i32) {
+        self.waveform = waveform.clone();
         let range = self.waveform.get_timestamp_range();
         self.timescale_state
             .load_waveform(range.clone(), range.end, timescale);
