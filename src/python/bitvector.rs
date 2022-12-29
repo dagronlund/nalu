@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 
 use waveform_db::bitvector::{BitVector, Logic};
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub enum LogicPy {
     Zero = 0,
@@ -11,6 +12,7 @@ pub enum LogicPy {
     HighImpedance = 3,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct BitVectorPy {
     bitvector: BitVector,

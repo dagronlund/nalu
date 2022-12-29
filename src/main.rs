@@ -4,7 +4,6 @@ pub mod widgets;
 
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 use std::time::{self, Duration, Instant};
 
@@ -28,7 +27,6 @@ use tui_layout::{
     container::{list::ContainerList, search::ContainerSearch, Container},
     ResizeError,
 };
-use waveform_db::Waveform;
 
 use crate::state::netlist_viewer::NetlistViewerState;
 use crate::state::signal_viewer::SignalViewerState;
@@ -38,7 +36,11 @@ use crate::state::*;
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 struct NaluArgs {
+    /// VCD file that will be loaded
     vcd_file: String,
+    #[clap(long)]
+    /// Optional python program that can be run
+    python: Option<String>,
 }
 
 fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
@@ -75,7 +77,7 @@ fn get_tui() -> Result<Box<dyn Container>, ResizeError> {
     main.add_component(Component::new(
         "waveform".to_string(),
         1,
-        Box::new(WaveformViewerState::new(Arc::new(Waveform::new()))),
+        Box::new(WaveformViewerState::new()),
     ))?;
 
     let mut nalu = ContainerList::new("nalu".to_string(), Direction::Vertical, false, 0, 0);
@@ -229,7 +231,14 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
     // Setup event listeners
     let args = NaluArgs::parse();
     let mut tui = get_tui().unwrap();
-    let mut nalu_state = NaluState::new(PathBuf::from(args.vcd_file.clone()));
+    let mut nalu_state = NaluState::new(
+        PathBuf::from(args.vcd_file.clone()),
+        if let Some(python) = args.python {
+            Some(PathBuf::from(python.clone()))
+        } else {
+            None
+        },
+    );
     let (tx_input, rx_input) = unbounded();
     spawn_input_listener(tx_input);
 
@@ -316,9 +325,9 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
 
         if let Some(msg) = nalu_state.get_done() {
             cleanup_terminal(terminal)?;
-            for d in durations {
-                println!("{:?}, (Total: {:?})", d.sections, d.total());
-            }
+            // for d in durations {
+            //     println!("{:?}, (Total: {:?})", d.sections, d.total());
+            // }
             return Ok(msg);
         }
         frame_duration.timestamp(String::from("check"));
@@ -348,6 +357,9 @@ thread_local! {
 }
 
 fn main() -> CrosstermResult<()> {
+    // Parse args once to exit before setting up TUI if necessary
+    let _ = NaluArgs::parse();
+
     if !stdout().is_tty() {
         println!("Error: Cannot open viewer when not TTY!");
         return Ok(());

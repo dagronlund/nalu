@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
@@ -5,10 +6,12 @@ use tui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    widgets::{Block, Widget},
+    text::Spans,
+    widgets::{Block, Paragraph, Widget},
 };
 use tui_layout::component::ComponentWidget;
 
+use vcd_parser::parser::VcdHeader;
 use waveform_db::Waveform;
 
 use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
@@ -19,28 +22,44 @@ pub struct WaveformViewerRequest(pub KeyEvent);
 
 pub struct WaveformViewerState {
     width: usize,
+    height: usize,
     waveform: Arc<Waveform>,
+    vcd_header: Arc<VcdHeader>,
     timescale_state: TimescaleState,
     signal_entries: Vec<Option<SignalViewerEntry>>,
     requests: Vec<WaveformViewerRequest>,
+    python_view: bool,
+    python_path: Option<PathBuf>,
 }
 
 impl WaveformViewerState {
-    pub fn new(waveform: Arc<Waveform>) -> Self {
+    pub fn new() -> Self {
         Self {
             width: 0,
-            waveform: waveform.clone(),
+            height: 0,
+            waveform: Arc::new(Waveform::default()),
+            vcd_header: Arc::new(VcdHeader::default()),
             timescale_state: TimescaleState::new(),
             signal_entries: Vec::new(),
             requests: Vec::new(),
+            python_view: false,
+            python_path: None,
         }
     }
 
-    pub fn load_waveform(&mut self, waveform: Arc<Waveform>, timescale: i32) {
-        self.waveform = waveform.clone();
+    pub fn load_waveform(
+        &mut self,
+        waveform: Arc<Waveform>,
+        vcd_header: Arc<VcdHeader>,
+        timescale: i32,
+        python_path: Option<PathBuf>,
+    ) {
+        self.waveform = waveform;
+        self.vcd_header = vcd_header;
         let range = self.waveform.get_timestamp_range();
         self.timescale_state
             .load_waveform(range.clone(), range.end, timescale);
+        self.python_path = python_path;
     }
 
     pub fn set_size(&mut self, size: &Rect, border_width: u16) {
@@ -49,12 +68,12 @@ impl WaveformViewerState {
         } else {
             0
         };
+        self.height = size.height as usize;
     }
 
     pub fn handle_key_press(&mut self, event: KeyEvent) {
-        // let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
-        // let shift = event.modifiers.contains(KeyModifiers::SHIFT);
         match event.clone().code {
+            KeyCode::Char('v') => self.python_view = !self.python_view,
             KeyCode::Char('-') => self.timescale_state.zoom_out(false),
             KeyCode::Char('=') => self.timescale_state.zoom_in(false),
             KeyCode::Char('[') => self.timescale_state.zoom_left(false),
@@ -75,27 +94,73 @@ impl WaveformViewerState {
         }
     }
 
-    pub fn get_waveform_widget<'a>(&'a self) -> WaveformViewerWidget<'a> {
-        let mut signal_widgets = Vec::new();
-        for signal_entry in &self.signal_entries {
-            if let Some(signal_entry) = signal_entry {
-                signal_widgets.push(Some(WaveformWidget::new(
-                    &self.timescale_state,
-                    &self.waveform,
-                    signal_entry.idcode,
-                    signal_entry.index,
-                    signal_entry.radix,
-                    signal_entry.is_selected,
-                )));
-            } else {
-                signal_widgets.push(None);
-            }
-        }
+    fn get_waveform_widget<'a>(&'a self) -> WaveformViewerWidget<'a> {
+        let signal_widgets = self
+            .signal_entries
+            .iter()
+            .map(|entry| {
+                entry.as_ref().map(|entry| {
+                    WaveformWidget::new(
+                        &self.timescale_state,
+                        &self.waveform,
+                        entry.idcode,
+                        entry.index,
+                        entry.radix,
+                        entry.is_selected,
+                    )
+                })
+            })
+            .collect::<Vec<Option<WaveformWidget>>>();
         WaveformViewerWidget {
             timescale_widget: Timescale::new(&self.timescale_state),
             signal_widgets,
             block: None,
             style: Default::default(),
+        }
+    }
+
+    fn get_python_widget<'a>(&'a self) -> Paragraph<'a> {
+        use crate::python::{buffer::*, vcd_header::*, waveform::*};
+        use pyo3::prelude::*;
+
+        let Some(python_path) = self.python_path.clone() else {
+            return Paragraph::new("No python loaded!");
+        };
+
+        let result: PyResult<BufferPy> = Python::with_gil(|py| {
+            let nalu = PyModule::new(py, "nalu")?;
+            py.import("sys")?
+                .getattr("modules")?
+                .set_item("nalu", nalu)?;
+
+            let python_bytes = std::fs::read(python_path)?;
+            let python_file = String::from_utf8_lossy(&python_bytes);
+            let main: Py<PyAny> = PyModule::from_code(py, &python_file, "", "")?
+                .getattr("main")?
+                .into();
+
+            let buffer = BufferPy::new(self.width as u16, self.height as u16);
+            let waveform = WaveformPy::new(self.waveform.clone());
+            let vcd_header = VcdHeaderPy::new(self.vcd_header.clone());
+            let cursor = self.timescale_state.get_cursor();
+            Ok(main
+                .call1(py, (buffer, waveform, vcd_header, cursor))?
+                .extract::<BufferPy>(py)?)
+        });
+
+        match result {
+            Ok(buffer) => {
+                let mut spans = Vec::new();
+                for y in 0..buffer.get_height() {
+                    let mut string = String::new();
+                    for x in 0..buffer.get_width() {
+                        string.push(buffer.get_cell(x, y));
+                    }
+                    spans.push(Spans::from(string.trim().to_string()));
+                }
+                Paragraph::new(spans)
+            }
+            Err(err) => Paragraph::new(format!("{err:?}")),
         }
     }
 
@@ -213,9 +278,15 @@ impl ComponentWidget for WaveformViewerState {
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.get_waveform_widget()
-            .style(Style::default().fg(Color::LightCyan))
-            .render(area, buf);
+        if self.python_view {
+            self.get_python_widget()
+                .style(Style::default().fg(Color::LightCyan))
+                .render(area, buf);
+        } else {
+            self.get_waveform_widget()
+                .style(Style::default().fg(Color::LightCyan))
+                .render(area, buf);
+        }
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

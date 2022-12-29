@@ -27,27 +27,29 @@ pub enum NaluOverlay {
 
 pub struct NaluState {
     vcd_path: PathBuf,
+    python_path: Option<PathBuf>,
     vcd_handle: Option<JoinHandle<VcdResult<(VcdHeader, Waveform)>>>,
     overlay: NaluOverlay,
     progress: Arc<Mutex<(usize, usize)>>,
-    vcd_header: VcdHeader,
+    vcd_header: Arc<VcdHeader>,
     filter_input: String,
     palette_input: String,
     done: Option<String>,
 }
 
 impl NaluState {
-    pub fn new(vcd_path: PathBuf) -> Self {
+    pub fn new(vcd_path: PathBuf, python_path: Option<PathBuf>) -> Self {
         // Load initial VCD file, TODO: Handle file loading error
         let bytes = std::fs::read_to_string(&vcd_path).unwrap();
         let progress = Arc::new(Mutex::new((0, 0)));
         let handle = load_multi_threaded(bytes, 4, progress.clone());
         Self {
-            vcd_path: vcd_path,
+            vcd_path,
+            python_path,
             vcd_handle: Some(handle),
             overlay: NaluOverlay::Loading,
-            progress: progress,
-            vcd_header: VcdHeader::new(),
+            progress,
+            vcd_header: Arc::new(VcdHeader::new()),
             filter_input: String::new(),
             palette_input: String::new(),
             done: None,
@@ -109,11 +111,7 @@ impl NaluState {
         self.vcd_handle = Some(handle);
     }
 
-    pub fn handle_vcd(
-        &mut self,
-        tui: &mut Box<dyn Container>, // netlist_viewer: &mut NetlistViewerState,
-                                      // waveform_viewer: &mut WaveformViewerState,
-    ) {
+    pub fn handle_vcd(&mut self, tui: &mut Box<dyn Container>) {
         // Check if we have a handle to work with
         if let None = &mut self.vcd_handle {
             return;
@@ -134,7 +132,7 @@ impl NaluState {
             }
         };
         self.overlay = NaluOverlay::None;
-        self.vcd_header = vcd_header;
+        self.vcd_header = Arc::new(vcd_header);
         let timescale = self.vcd_header.get_timescale();
         tui.as_container_mut()
             .search_name_widget_mut::<NetlistViewerState>("main.netlist_main.netlist")
@@ -145,10 +143,12 @@ impl NaluState {
             .unwrap()
             .load_waveform(
                 Arc::new(waveform),
+                self.vcd_header.clone(),
                 match timescale {
                     Some(timescale) => *timescale,
                     None => 0,
                 },
+                self.python_path.clone(),
             );
     }
 

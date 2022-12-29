@@ -65,7 +65,7 @@ fn render_time(timestamp: u64, resolution: u64, timescale: i32) -> String {
 
 pub struct TimescaleState {
     range: Range<u64>,
-    cursor: u64,
+    _cursor: u64,
     timescale: i32,
     timestamp_max: u64,
 }
@@ -74,7 +74,7 @@ impl TimescaleState {
     pub fn new() -> Self {
         Self {
             range: 0..1000000, // Actual time is timestamp*10^(-timescale)
-            cursor: 0,
+            _cursor: 0,
             timescale: 6,
             timestamp_max: 1000000,
         }
@@ -140,7 +140,8 @@ impl TimescaleState {
     }
 
     pub fn get_cursor(&self) -> u64 {
-        self.cursor
+        // TODO: Implement actual cursor
+        self.range.start
     }
 
     pub fn get_timescale(&self) -> i32 {

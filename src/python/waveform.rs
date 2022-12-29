@@ -6,6 +6,7 @@ use waveform_db::{Waveform, WaveformValueResult};
 
 use crate::python::bitvector::BitVectorPy;
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct WaveformValueResultPy {
     value: WaveformValueResult,

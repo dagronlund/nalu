@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 
 use vcd_parser::parser::{VcdHeader, VcdVariable};
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct VcdVariablePy {
     value: VcdVariable,
@@ -33,6 +34,7 @@ impl VcdVariablePy {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct VcdHeaderPy {
     value: Arc<VcdHeader>,

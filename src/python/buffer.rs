@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct BufferPy {
     width: u16,
@@ -29,6 +30,14 @@ impl BufferPy {
             self.buffer[(y * self.width + x) as usize] = c;
         }
     }
+
+    pub fn get_width(&self) -> u16 {
+        self.width
+    }
+
+    pub fn get_height(&self) -> u16 {
+        self.height
+    }
 }
 
 #[pymethods]
@@ -42,5 +51,15 @@ impl BufferPy {
     fn set_cell_py(mut self_: PyRefMut<'_, Self>, x: u16, y: u16, c: char) -> PyResult<()> {
         self_.set_cell(x, y, c);
         Ok(())
+    }
+
+    #[pyo3(name = "get_width")]
+    fn get_width_py(self_: PyRef<'_, Self>) -> PyResult<u16> {
+        Ok(self_.get_width())
+    }
+
+    #[pyo3(name = "get_height")]
+    fn get_height_py(self_: PyRef<'_, Self>) -> PyResult<u16> {
+        Ok(self_.get_height())
     }
 }

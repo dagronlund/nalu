@@ -1,7 +1,7 @@
-mod bitvector;
-mod buffer;
-mod vcd_header;
-mod waveform;
+pub mod bitvector;
+pub mod buffer;
+pub mod vcd_header;
+pub mod waveform;
 
 #[test]
 fn test_pyo3() -> pyo3::prelude::PyResult<()> {
@@ -23,13 +23,13 @@ fn test_pyo3() -> pyo3::prelude::PyResult<()> {
 
         #[pyclass]
         struct ClassTest {
-            string: std::sync::Arc<String>,
+            string: Arc<String>,
         }
 
         impl ClassTest {
             fn new(string: String) -> Self {
                 Self {
-                    string: std::sync::Arc::new(string),
+                    string: Arc::new(string),
                 }
             }
         }
