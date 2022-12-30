@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use waveform_db::{Waveform, WaveformValueResult};
+use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
 
 use crate::python::bitvector::BitVectorPy;
 
@@ -80,32 +80,18 @@ impl WaveformPy {
     }
 
     #[pyo3(name = "search_timestamp")]
-    fn search_timestamp_py(self_: PyRef<'_, Self>, timestamp: u64) -> PyResult<Option<usize>> {
-        Ok(self_.waveform.search_timestamp(timestamp))
-    }
-
-    #[pyo3(name = "search_timestamp_after")]
-    fn search_timestamp_after_py(
+    fn search_timestamp_py(
         self_: PyRef<'_, Self>,
         timestamp: u64,
+        mode: Option<u32>,
     ) -> PyResult<Option<usize>> {
-        Ok(self_.waveform.search_timestamp_after(timestamp))
-    }
-
-    #[pyo3(name = "search_timestamp_range")]
-    fn search_timestamp_range_py(
-        self_: PyRef<'_, Self>,
-        timestamp_range: (u64, u64),
-        greedy: bool,
-    ) -> PyResult<Option<(usize, usize)>> {
-        if let Some(result) = self_
-            .waveform
-            .search_timestamp_range(timestamp_range.0..timestamp_range.1, greedy)
-        {
-            Ok(Some((result.start, result.end)))
-        } else {
-            Ok(None)
-        }
+        let mode = match mode {
+            Some(0) => WaveformSearchMode::Before,
+            Some(1) => WaveformSearchMode::After,
+            Some(3) => WaveformSearchMode::Exact,
+            _ => WaveformSearchMode::Closest,
+        };
+        Ok(self_.waveform.search_timestamp(timestamp, mode))
     }
 
     #[pyo3(name = "search_value")]

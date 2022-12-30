@@ -19,7 +19,6 @@ lazy_static = "1.4.0"
 backtrace = "0.3.67"
 indiscriminant = "0.2.0"
 byte_storage = { path = "../byte_storage" }
-crossbeam_helper = { path = "../crossbeam_helper" }
 vcd_parser = { path = "../vcd_parser" }
 waveform_db = { path = "../waveform_db" }
 tui_layout = { path = "../tui_layout" }

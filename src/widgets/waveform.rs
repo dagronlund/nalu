@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use waveform_db::bitvector::{BitVectorRadix, Logic};
-use waveform_db::{Waveform, WaveformValueResult};
+use waveform_db::{Waveform, WaveformValueResult, WaveformSearchMode};
 
 use tui::{
     buffer::Buffer,
@@ -133,20 +133,30 @@ impl WaveformQuery {
 impl<'a> WaveformWidget<'a> {
     fn get_query(&self, timestamp_range: Range<u64>) -> WaveformQuery {
         // Find the timestamp indices that are contained by the timestamp range
-        let Some(timestamp_index_range) = self
-            .waveform
-            .search_timestamp_range(timestamp_range.clone(), false) else {
+        if timestamp_range.end == 0 {
+            return WaveformQuery::None(1);
+        }
+        let Some(timestamp_index_start) = self.waveform.search_timestamp(
+            timestamp_range.start, 
+            WaveformSearchMode::After
+        ) else {
+            return WaveformQuery::None(1);
+        };
+        let Some(timestamp_index_end) = self.waveform.search_timestamp(
+            timestamp_range.end - 1, 
+            WaveformSearchMode::Before
+        ) else {
             return WaveformQuery::None(1);
         };
         // Check if there is a value available
         let Some(result) = self.waveform.search_value_bit_index(
             self.idcode,
-            timestamp_index_range.end,
+            timestamp_index_end,
             self.bit_index,
         ) else {
             return WaveformQuery::None(1);
         };
-        if result.get_timestamp_index() < timestamp_index_range.start {
+        if result.get_timestamp_index() < timestamp_index_start {
             // Value changed before range
             return WaveformQuery::Static(result, 1);
         }
@@ -163,9 +173,9 @@ impl<'a> WaveformWidget<'a> {
             result.get_timestamp_index() - 1, 
             self.bit_index
         ) else {
-                return WaveformQuery::SingleEdge(result, 1);
+            return WaveformQuery::SingleEdge(result, 1);
         };
-        if result_before.get_timestamp_index() >= timestamp_index_range.start {
+        if result_before.get_timestamp_index() >= timestamp_index_start {
             WaveformQuery::MultipleEdge(1)
         } else {
             WaveformQuery::SingleEdge(result, 1)
@@ -269,7 +279,7 @@ fn signal_render_test() {
         _ => panic!("Cannot find vector signal!"),
     };
 
-    let timestamp_index = waveform.search_timestamp(5).unwrap();
+    let timestamp_index = waveform.search_timestamp(5, WaveformSearchMode::Before).unwrap();
     let mut pos = signal
         .get_history()
         .search_timestamp_index(timestamp_index)
@@ -282,7 +292,7 @@ fn signal_render_test() {
         pos = pos.next(&signal.get_history()).unwrap();
     }
 
-    let timestamp_index = waveform.search_timestamp(10).unwrap();
+    let timestamp_index = waveform.search_timestamp(10, WaveformSearchMode::Before).unwrap();
     let mut pos = signal
         .get_history()
         .search_timestamp_index(timestamp_index)

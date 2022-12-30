@@ -6,8 +6,6 @@ use std::thread::{self, JoinHandle};
 
 use crossbeam::channel::bounded;
 
-use crossbeam_helper::*;
-
 use vcd_parser::errors::*;
 use vcd_parser::lexer::{position::LexerPosition, Lexer, LexerToken};
 use vcd_parser::parser::{VcdEntry, VcdHeader, VcdParser};
