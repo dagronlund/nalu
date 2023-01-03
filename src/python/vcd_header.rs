@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 
 use vcd_parser::parser::{VcdHeader, VcdVariable};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass]
 pub struct VcdVariablePy {
     value: VcdVariable,
