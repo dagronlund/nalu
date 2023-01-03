@@ -129,6 +129,7 @@ impl WaveformViewerState {
 
         let result: PyResult<BufferPy> = Python::with_gil(|py| {
             let nalu = PyModule::new(py, "nalu")?;
+            nalu.add_class::<crate::python::waveform::WaveformSearchModePy>()?;
             py.import("sys")?
                 .getattr("modules")?
                 .set_item("nalu", nalu)?;
@@ -160,7 +161,7 @@ impl WaveformViewerState {
                 }
                 Paragraph::new(spans)
             }
-            Err(err) => Paragraph::new(format!("{err:?}")),
+            Err(err) => Paragraph::new(format!("{err:#?}")),
         }
     }
 

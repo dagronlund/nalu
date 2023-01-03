@@ -7,6 +7,15 @@ use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
 use crate::python::bitvector::BitVectorPy;
 
 #[derive(Clone, Debug, PartialEq)]
+#[pyclass(name = "WaveformSearchMode")]
+pub enum WaveformSearchModePy {
+    Before = 0,
+    After = 1,
+    Closest = 2,
+    Exact = 3,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 #[pyclass]
 pub struct WaveformValueResultPy {
     value: WaveformValueResult,
@@ -79,6 +88,15 @@ impl WaveformPy {
         Ok((result.start, result.end))
     }
 
+    #[pyo3(name = "get_timestamp")]
+    fn get_timestamp_py(self_: PyRef<'_, Self>, timestamp_index: usize) -> PyResult<Option<u64>> {
+        Ok(self_
+            .waveform
+            .get_timestamps()
+            .get(timestamp_index)
+            .map(|i| *i))
+    }
+
     #[pyo3(name = "search_timestamp")]
     fn search_timestamp_py(
         self_: PyRef<'_, Self>,
@@ -101,11 +119,12 @@ impl WaveformPy {
         timestamp_index: usize,
         bit_index: Option<usize>,
     ) -> PyResult<Option<WaveformValueResultPy>> {
-        if let Some(value) =
-            self_
-                .waveform
-                .search_value_bit_index(idcode, timestamp_index, bit_index)
-        {
+        if let Some(value) = self_.waveform.search_value_bit_index(
+            idcode,
+            timestamp_index,
+            WaveformSearchMode::Before,
+            bit_index,
+        ) {
             Ok(Some(WaveformValueResultPy::new(value)))
         } else {
             Ok(None)

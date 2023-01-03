@@ -152,6 +152,7 @@ impl<'a> WaveformWidget<'a> {
         let Some(result) = self.waveform.search_value_bit_index(
             self.idcode,
             timestamp_index_end,
+            WaveformSearchMode::Before,
             self.bit_index,
         ) else {
             return WaveformQuery::None(1);
@@ -171,6 +172,7 @@ impl<'a> WaveformWidget<'a> {
         let Some(result_before) = self.waveform.search_value_bit_index(
             self.idcode, 
             result.get_timestamp_index() - 1, 
+            WaveformSearchMode::Before,
             self.bit_index
         ) else {
             return WaveformQuery::SingleEdge(result, 1);
@@ -254,7 +256,7 @@ impl<'a> Widget for WaveformWidget<'a> {
 fn signal_render_test() {
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use waveform_db::*;
+    // use waveform_db::*;
 
     let fname = "res/gecko.vcd";
 
@@ -274,36 +276,6 @@ fn signal_render_test() {
     let timestamp_range = 0u64..100u64;
 
     let idcode = header.get_variable("TOP.clk").unwrap().get_idcode();
-    let signal = match waveform.get_signal(idcode) {
-        Some(WaveformSignalResult::Vector(signal)) => signal,
-        _ => panic!("Cannot find vector signal!"),
-    };
-
-    let timestamp_index = waveform.search_timestamp(5, WaveformSearchMode::Before).unwrap();
-    let mut pos = signal
-        .get_history()
-        .search_timestamp_index(timestamp_index)
-        .unwrap();
-    for _ in 0..5 {
-        println!(
-            "Timestamp Index: {}, Pos: {pos:?}",
-            pos.get_index().get_timestamp_index()
-        );
-        pos = pos.next(&signal.get_history()).unwrap();
-    }
-
-    let timestamp_index = waveform.search_timestamp(10, WaveformSearchMode::Before).unwrap();
-    let mut pos = signal
-        .get_history()
-        .search_timestamp_index(timestamp_index)
-        .unwrap();
-    for _ in 0..5 {
-        println!(
-            "Timestamp Index: {}, Pos: {pos:?}",
-            pos.get_index().get_timestamp_index()
-        );
-        pos = pos.next(&signal.get_history()).unwrap();
-    }
 
     let mut timescale_state = TimescaleState::new();
     timescale_state.load_waveform(
