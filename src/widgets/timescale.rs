@@ -153,6 +153,12 @@ impl TimescaleState {
     }
 }
 
+impl Default for TimescaleState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Timescale<'a> {
     /// The timescale range and cursor position to render
     state: &'a TimescaleState,

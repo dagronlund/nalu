@@ -6,7 +6,7 @@ use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
 
 use crate::python::bitvector::BitVectorPy;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass(name = "WaveformSearchMode")]
 pub enum WaveformSearchModePy {
     Before = 0,
@@ -94,7 +94,7 @@ impl WaveformPy {
             .waveform
             .get_timestamps()
             .get(timestamp_index)
-            .map(|i| *i))
+            .copied())
     }
 
     #[pyo3(name = "search_timestamp")]

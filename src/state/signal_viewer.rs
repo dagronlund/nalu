@@ -73,9 +73,7 @@ fn create_variable_node(
         if variable.get_bit_width() > 1 {
             (0..variable.get_bit_width())
                 .into_iter()
-                .map(|i| {
-                    SignalNode::VectorSignal(path.clone(), variable.clone(), radix.clone(), Some(i))
-                })
+                .map(|i| SignalNode::VectorSignal(path.clone(), variable.clone(), radix, Some(i)))
                 .map(|n| BrowserNode::new(Some(n)))
                 .collect()
         } else {
@@ -123,7 +121,7 @@ impl SignalViewerState {
     ) {
         self.node
             .get_children_mut()
-            .push(create_variable_node(path.clone(), variable, radix));
+            .push(create_variable_node(path, variable, radix));
     }
 
     fn browser_request_insert(
@@ -211,7 +209,7 @@ impl SignalViewerState {
         self.push_request();
     }
 
-    pub fn get_browser<'a>(&'a self) -> Browser<'a, SignalNode> {
+    pub fn get_browser(&self) -> Browser<'_, SignalNode> {
         Browser::new(&self.browser, &self.node)
     }
 
@@ -262,7 +260,7 @@ impl SignalViewerState {
                     Some(SignalViewerEntry {
                         idcode: vcd_variable.get_idcode(),
                         index: *index,
-                        radix: radix.clone(),
+                        radix: *radix,
                         is_selected,
                     })
                 }
@@ -276,6 +274,12 @@ impl SignalViewerState {
         let mut requests = Vec::new();
         std::mem::swap(&mut requests, &mut self.requests);
         requests
+    }
+}
+
+impl Default for SignalViewerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

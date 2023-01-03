@@ -62,7 +62,7 @@ fn get_tui() -> Result<Box<dyn Container>, ResizeError> {
     let mut netlist_filter = Component::new(
         "filter".to_string(),
         1,
-        Box::new(ComponentWidgetSimple::new().text(format!("TODO: Filter"))),
+        Box::new(ComponentWidgetSimple::new().text("TODO: Filter".to_string())),
     );
     netlist_filter.set_fixed_height(Some(3));
     netlist_main.add_component(netlist_filter)?;
@@ -219,9 +219,15 @@ impl FrameDuration {
     pub fn total(&self) -> Duration {
         let mut total = Duration::new(0, 0);
         for (_, d) in &self.sections {
-            total += d.clone();
+            total += *d;
         }
         total
+    }
+}
+
+impl Default for FrameDuration {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -233,11 +239,7 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
     let mut tui = get_tui().unwrap();
     let mut nalu_state = NaluState::new(
         PathBuf::from(args.vcd_file.clone()),
-        if let Some(python) = args.python {
-            Some(PathBuf::from(python.clone()))
-        } else {
-            None
-        },
+        args.python.map(PathBuf::from),
     );
     let (tx_input, rx_input) = unbounded();
     spawn_input_listener(tx_input);

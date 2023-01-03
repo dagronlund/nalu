@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass]
 pub struct BufferPy {
     width: u16,

@@ -16,7 +16,7 @@ use waveform_db::Waveform;
 
 use crate::state::{netlist_viewer::NetlistViewerState, waveform_viewer::WaveformViewerState};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NaluOverlay {
     Loading,
     Palette,
@@ -69,27 +69,24 @@ impl NaluState {
     }
 
     pub fn handle_key(&mut self, event: KeyEvent) -> Option<KeyEvent> {
-        let key_code = event.code.clone();
         match self.overlay {
-            NaluOverlay::Loading => match key_code {
-                KeyCode::Char('q') => self.done = Some(String::new()),
-                _ => {}
-            },
-            NaluOverlay::Palette => match key_code {
-                KeyCode::Esc => self.overlay = NaluOverlay::None,
-                _ => {}
-            },
-            NaluOverlay::HelpPrompt => match key_code {
+            NaluOverlay::Loading if event.code == KeyCode::Char('q') => {
+                self.done = Some(String::new());
+            }
+            NaluOverlay::Palette if event.code == KeyCode::Esc => {
+                self.overlay = NaluOverlay::None;
+            }
+            NaluOverlay::HelpPrompt => match event.code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Esc => self.overlay = NaluOverlay::None,
                 _ => {}
             },
-            NaluOverlay::QuitPrompt => match key_code {
+            NaluOverlay::QuitPrompt => match event.code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Esc => self.overlay = NaluOverlay::None,
                 _ => {}
             },
-            NaluOverlay::None => match key_code {
+            NaluOverlay::None => match event.code {
                 KeyCode::Char('q') => self.done = Some(String::new()),
                 KeyCode::Char('h') => self.overlay = NaluOverlay::HelpPrompt,
                 KeyCode::Char('p') => self.overlay = NaluOverlay::Palette,
@@ -99,6 +96,7 @@ impl NaluState {
                 }
                 _ => return Some(event),
             },
+            _ => {}
         }
         None
     }
@@ -113,7 +111,7 @@ impl NaluState {
 
     pub fn handle_vcd(&mut self, tui: &mut Box<dyn Container>) {
         // Check if we have a handle to work with
-        if let None = &mut self.vcd_handle {
+        if self.vcd_handle.is_none() {
             return;
         }
         // Wait for the thread to complete
@@ -137,7 +135,7 @@ impl NaluState {
         tui.as_container_mut()
             .search_name_widget_mut::<NetlistViewerState>("main.netlist_main.netlist")
             .unwrap()
-            .update_scopes(&self.vcd_header.get_scopes());
+            .update_scopes(self.vcd_header.get_scopes());
         tui.as_container_mut()
             .search_name_widget_mut::<WaveformViewerState>("main.waveform")
             .unwrap()

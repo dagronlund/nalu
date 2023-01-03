@@ -58,7 +58,7 @@ impl<E> BrowserNode<E> {
     }
 
     pub fn is_parent(&self) -> bool {
-        self.children.len() > 0
+        !self.children.is_empty()
     }
 
     pub fn is_expanded(&self) -> bool {
@@ -93,12 +93,11 @@ impl<E> BrowserNode<E> {
                 .sum::<usize>()
         } else {
             0
-        }) + (if let Some(_) = &self.entry { 1 } else { 0 })
+        }) + usize::from(self.entry.is_some())
     }
 
-    pub fn get_path(&self, index: usize) -> BrowserNodePath {
-        let mut index = index;
-        for (i, c) in (&self.children).iter().enumerate() {
+    pub fn get_path(&self, mut index: usize) -> BrowserNodePath {
+        for (i, c) in self.children.iter().enumerate() {
             if index == 0 {
                 return BrowserNodePath(vec![i]);
             } else if index < c.get_render_len() {
@@ -128,7 +127,7 @@ impl<E> BrowserNode<E> {
     }
 
     pub fn get_node(&self, path: &BrowserNodePath) -> Option<&BrowserNode<E>> {
-        if path.0.len() == 0 {
+        if path.0.is_empty() {
             None
         } else if path.0.len() == 1 {
             self.children.get(path.0[0])
@@ -138,7 +137,7 @@ impl<E> BrowserNode<E> {
     }
 
     pub fn get_node_mut(&mut self, path: &BrowserNodePath) -> Option<&mut BrowserNode<E>> {
-        if path.0.len() == 0 {
+        if path.0.is_empty() {
             None
         } else if path.0.len() == 1 {
             self.children.get_mut(path.0[0])
@@ -158,7 +157,7 @@ where
         } else {
             Vec::new()
         };
-        let mut suffix = if path.0.len() == 0 {
+        let mut suffix = if path.0.is_empty() {
             Vec::new()
         } else {
             self.children[path.0[0]].get_full_name(&BrowserNodePath(path.0[1..].to_vec()))
@@ -193,13 +192,13 @@ impl<E> Default for BrowserNode<E> {
 
 impl<E> std::ops::Index<usize> for BrowserNode<E> {
     type Output = BrowserNode<E>;
-    fn index<'a>(&'a self, i: usize) -> &'a BrowserNode<E> {
+    fn index(&'_ self, i: usize) -> &'_ BrowserNode<E> {
         &self.children[i]
     }
 }
 
 impl<E> std::ops::IndexMut<usize> for BrowserNode<E> {
-    fn index_mut<'a>(&'a mut self, i: usize) -> &'a mut BrowserNode<E> {
+    fn index_mut(&'_ mut self, i: usize) -> &'_ mut BrowserNode<E> {
         &mut self.children[i]
     }
 }
@@ -214,8 +213,7 @@ impl BrowserNodePath {
         self.0
     }
 
-    pub fn condense_paths(paths: Vec<Self>) -> Vec<Self> {
-        let mut paths = paths.clone();
+    pub fn condense_paths(mut paths: Vec<Self>) -> Vec<Self> {
         paths.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut i = 0;
         while i < paths.len() - 1 {
@@ -235,7 +233,7 @@ impl BrowserNodePath {
             // Cannot contain an empty path
             return false;
         }
-        for (i, index) in (&self.0).iter().enumerate() {
+        for (i, index) in self.0.iter().enumerate() {
             match other.0.get(i) {
                 Some(other_index) => {
                     if other_index != index {
@@ -258,15 +256,14 @@ impl BrowserNodePath {
 impl PartialOrd for BrowserNodePath {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         for (i, a) in self.0.iter().enumerate() {
-            match other.0.get(i) {
-                Some(b) => {
-                    if a > b {
-                        return Some(Ordering::Greater);
-                    } else if a < b {
-                        return Some(Ordering::Less);
-                    }
-                }
+            let b = match other.0.get(i) {
+                Some(b) => b,
                 None => return Some(Ordering::Greater),
+            };
+            match a.cmp(b) {
+                Ordering::Greater => return Some(Ordering::Greater),
+                Ordering::Less => return Some(Ordering::Less),
+                Ordering::Equal => {}
             }
         }
         if self.0.len() < other.0.len() {
@@ -515,12 +512,10 @@ where
             };
             let content = if self.state.full_name_enabled {
                 self.node.get_full_name(&path).join(".")
+            } else if let Some(entry) = sub_node.get_entry() {
+                entry.to_string()
             } else {
-                if let Some(entry) = sub_node.get_entry() {
-                    entry.to_string()
-                } else {
-                    String::new()
-                }
+                String::new()
             };
             let node_raw = format!("{}{}{}", indents, expander, content);
             let padding = String::from(" ").repeat(if node_raw.len() < area.width as usize {

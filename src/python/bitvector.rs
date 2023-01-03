@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 
 use waveform_db::bitvector::{BitVector, Logic};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass]
 pub enum LogicPy {
     Zero = 0,

@@ -69,6 +69,6 @@ impl VcdHeaderPy {
 
     #[pyo3(name = "get_timescale")]
     pub fn get_timescale_py(self_: PyRef<'_, Self>) -> PyResult<Option<i32>> {
-        Ok(self_.value.get_timescale().clone())
+        Ok(*self_.value.get_timescale())
     }
 }

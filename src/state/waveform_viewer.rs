@@ -72,7 +72,7 @@ impl WaveformViewerState {
     }
 
     pub fn handle_key_press(&mut self, event: KeyEvent) {
-        match event.clone().code {
+        match event.code {
             KeyCode::Char('v') => self.python_view = !self.python_view,
             KeyCode::Char('-') => self.timescale_state.zoom_out(false),
             KeyCode::Char('=') => self.timescale_state.zoom_in(false),
@@ -94,7 +94,7 @@ impl WaveformViewerState {
         }
     }
 
-    fn get_waveform_widget<'a>(&'a self) -> WaveformViewerWidget<'a> {
+    fn get_waveform_widget(&self) -> WaveformViewerWidget<'_> {
         let signal_widgets = self
             .signal_entries
             .iter()
@@ -119,7 +119,7 @@ impl WaveformViewerState {
         }
     }
 
-    fn get_python_widget<'a>(&'a self) -> Paragraph<'a> {
+    fn get_python_widget(&self) -> Paragraph<'_> {
         use crate::python::{buffer::*, vcd_header::*, waveform::*};
         use pyo3::prelude::*;
 
@@ -144,9 +144,8 @@ impl WaveformViewerState {
             let waveform = WaveformPy::new(self.waveform.clone());
             let vcd_header = VcdHeaderPy::new(self.vcd_header.clone());
             let cursor = self.timescale_state.get_cursor();
-            Ok(main
-                .call1(py, (buffer, waveform, vcd_header, cursor))?
-                .extract::<BufferPy>(py)?)
+            main.call1(py, (buffer, waveform, vcd_header, cursor))?
+                .extract::<BufferPy>(py)
         });
 
         match result {
@@ -200,6 +199,12 @@ impl WaveformViewerState {
         let mut requests = Vec::new();
         std::mem::swap(&mut requests, &mut self.requests);
         requests
+    }
+}
+
+impl Default for WaveformViewerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

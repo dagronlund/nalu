@@ -42,7 +42,7 @@ lazy_static! {
 // Looks for a node with the same name, first in the expected place, then
 // through all nodes, and if that fails returns a default node
 fn search_nodes<'a>(
-    nodes: &'a Vec<BrowserNode<NetlistNode>>,
+    nodes: &'a [BrowserNode<NetlistNode>],
     name: &String,
     expected_index: usize,
 ) -> &'a BrowserNode<NetlistNode> {
@@ -61,9 +61,9 @@ fn generate_new_node(
     // Search through the old node's children for matches to the new scope children
     let mut new_scopes = new_scope
         .get_scopes()
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(|(i, s)| generate_new_node(search_nodes(&old_node.get_children(), s.get_name(), i), s))
+        .map(|(i, s)| generate_new_node(search_nodes(old_node.get_children(), s.get_name(), i), s))
         .collect::<Vec<BrowserNode<NetlistNode>>>();
 
     // Sort the new child scope nodes
@@ -83,15 +83,13 @@ fn generate_new_node(
 
 fn generate_new_nodes(
     old_nodes: &BrowserNode<NetlistNode>,
-    new_scopes: &Vec<VcdScope>,
+    new_scopes: &[VcdScope],
 ) -> BrowserNode<NetlistNode> {
     // Search through the old node's children for matches to the new scope children
     let mut new_scopes = new_scopes
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(|(i, s)| {
-            generate_new_node(search_nodes(&old_nodes.get_children(), s.get_name(), i), s)
-        })
+        .map(|(i, s)| generate_new_node(search_nodes(old_nodes.get_children(), s.get_name(), i), s))
         .collect::<Vec<BrowserNode<NetlistNode>>>();
     // Sort the new child scope nodes
     new_scopes.sort_by(|a, b| alphanumeric_sort::compare_str(&a.to_string(), &b.to_string()));
@@ -133,9 +131,9 @@ impl NetlistViewerState {
         self.filters = construct_filter(filter);
     }
 
-    pub fn update_scopes(&mut self, new_scopes: &Vec<VcdScope>) {
+    pub fn update_scopes(&mut self, new_scopes: &[VcdScope]) {
         // Set new scopes and clear the selected item
-        self.node = generate_new_nodes(&self.node, &new_scopes);
+        self.node = generate_new_nodes(&self.node, new_scopes);
         self.state.select_relative(&self.node, 0, true);
     }
 
@@ -178,7 +176,7 @@ impl NetlistViewerState {
             .select_relative(&self.node, if scroll_up { -5 } else { 5 }, true);
     }
 
-    pub fn get_browser<'a>(&'a self) -> Browser<'a, NetlistNode> {
+    pub fn get_browser(&self) -> Browser<'_, NetlistNode> {
         Browser::new(&self.state, &self.node)
     }
 
@@ -193,7 +191,7 @@ impl NetlistViewerState {
                 _ => None,
             })
             // Convert path to full names
-            .map(|(path, variable)| (self.node.get_full_name(&path), variable.clone()))
+            .map(|(path, variable)| (self.node.get_full_name(path), variable.clone()))
             .collect()
     }
 
@@ -228,6 +226,12 @@ impl NetlistViewerState {
         let mut requests = Vec::new();
         std::mem::swap(&mut requests, &mut self.requests);
         requests
+    }
+}
+
+impl Default for NetlistViewerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use waveform_db::bitvector::{BitVectorRadix, Logic};
-use waveform_db::{Waveform, WaveformValueResult, WaveformSearchMode};
+use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
 
 use tui::{
     buffer::Buffer,
@@ -65,13 +65,13 @@ impl WaveformQuery {
             Self::SingleEdge(value, width) => (value, width, false, true),
             Self::MultipleEdge(width) => {
                 return (
-                    format!("#").repeat(*width),
+                    "#".repeat(*width),
                     Style::default().fg(Color::Black).bg(Color::Gray),
                 )
             }
             Self::None(width) => {
                 return (
-                    format!(" ").repeat(*width),
+                    " ".repeat(*width),
                     Style::default().fg(Color::White).bg(Color::Black),
                 )
             }
@@ -91,17 +91,15 @@ impl WaveformQuery {
             WaveformValueResult::Vector(bv, _) => {
                 if bv.get_bit_width() <= 1 {
                     match bv.get_bit(0) {
-                        Logic::Zero => format!("_").repeat(*width),
-                        Logic::One => format!("█").repeat(*width),
-                        Logic::Unknown => format!("X").repeat(*width),
-                        Logic::HighImpedance => format!("Z").repeat(*width),
+                        Logic::Zero => "_".repeat(*width),
+                        Logic::One => "█".repeat(*width),
+                        Logic::Unknown => "X".repeat(*width),
+                        Logic::HighImpedance => "Z".repeat(*width),
                     }
+                } else if is_delta {
+                    format!("|{}", bv.to_string_radix(radix))
                 } else {
-                    if is_delta {
-                        format!("|{}", bv.to_string_radix(radix))
-                    } else {
-                        bv.to_string_radix(radix)
-                    }
+                    bv.to_string_radix(radix)
                 }
             }
             WaveformValueResult::Real(f, _) => {
@@ -137,13 +135,13 @@ impl<'a> WaveformWidget<'a> {
             return WaveformQuery::None(1);
         }
         let Some(timestamp_index_start) = self.waveform.search_timestamp(
-            timestamp_range.start, 
+            timestamp_range.start,
             WaveformSearchMode::After
         ) else {
             return WaveformQuery::None(1);
         };
         let Some(timestamp_index_end) = self.waveform.search_timestamp(
-            timestamp_range.end - 1, 
+            timestamp_range.end - 1,
             WaveformSearchMode::Before
         ) else {
             return WaveformQuery::None(1);
@@ -170,8 +168,8 @@ impl<'a> WaveformWidget<'a> {
             return WaveformQuery::SingleEdge(result, 1);
         }
         let Some(result_before) = self.waveform.search_value_bit_index(
-            self.idcode, 
-            result.get_timestamp_index() - 1, 
+            self.idcode,
+            result.get_timestamp_index() - 1,
             WaveformSearchMode::Before,
             self.bit_index
         ) else {
@@ -199,10 +197,7 @@ impl<'a> Widget for WaveformWidget<'a> {
                 range.start + self.timescale_state.get_range().start
                     ..range.end + self.timescale_state.get_range().start
             })
-            .map(|range| {
-                let query = self.get_query(range.clone());
-                query
-            })
+            .map(|range| self.get_query(range))
             .collect::<Vec<WaveformQuery>>();
 
         // Merge queries together when possible
