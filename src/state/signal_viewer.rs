@@ -1,17 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use makai::utils::messages::Messages;
+use makai_vcd_reader::parser::VcdVariable;
+use makai_waveform_db::bitvector::BitVectorRadix;
 use tui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
     widgets::Widget,
 };
-use tui_layout::component::ComponentWidget;
+use tui_tiling::component::ComponentWidget;
 
-use vcd_parser::parser::VcdVariable;
-use waveform_db::bitvector::BitVectorRadix;
-
-use crate::state::netlist_viewer::NetlistViewerRequest;
-use crate::widgets::browser::*;
+use crate::{state::waveform_viewer::WaveformViewerMessage, widgets::browser::*};
 
 #[derive(Clone)]
 pub enum SignalNode {
@@ -89,6 +88,7 @@ enum ListAction {
     Expand,
 }
 
+#[derive(Debug, Clone)]
 pub struct SignalViewerEntry {
     pub(crate) idcode: usize,
     pub(crate) index: Option<usize>,
@@ -96,20 +96,24 @@ pub struct SignalViewerEntry {
     pub(crate) is_selected: bool,
 }
 
-pub struct SignalViewerRequest(pub(crate) Vec<Option<SignalViewerEntry>>);
+pub(crate) enum SignalViewerMessage {
+    NetlistAppend(Vec<String>, VcdVariable),
+    NetlistInsert(Vec<String>, VcdVariable),
+    WaveformKey(KeyEvent),
+}
 
 pub struct SignalViewerState {
     browser: BrowserState,
     node: BrowserNode<SignalNode>,
-    requests: Vec<SignalViewerRequest>,
+    messages: Messages,
 }
 
 impl SignalViewerState {
-    pub fn new() -> Self {
+    pub fn new(messages: Messages) -> Self {
         Self {
             browser: BrowserState::new(true, true, false),
             node: BrowserNode::from_expanded(None, true, Vec::new()),
-            requests: Vec::new(),
+            messages,
         }
     }
 
@@ -122,47 +126,6 @@ impl SignalViewerState {
         self.node
             .get_children_mut()
             .push(create_variable_node(path, variable, radix));
-    }
-
-    fn browser_request_insert(
-        &mut self,
-        _path: Vec<String>,
-        _variable: VcdVariable,
-        _insert_path: BrowserNodePath,
-    ) -> BrowserNodePath {
-        // self.node
-        // .get_children_mut()
-        // .push(create_variable_node(path.clone(), variable));
-
-        // if let Some((index, primary_parent)) = insert_path.clone().to_vec().split_last() {
-        // } else {
-        //     self.browser_request_append(path, variable);
-        // }
-
-        // let insert_node = self.node.get_node_mut(&primary_path);
-
-        BrowserNodePath::new(Vec::new())
-    }
-
-    pub fn browser_request(&mut self, requests: Vec<NetlistViewerRequest>) {
-        let mut insert_path = self.browser.get_primary_selected_path(&self.node);
-        for request in requests {
-            match request {
-                NetlistViewerRequest::Append(path, variable) => {
-                    self.browser_request_append(path, variable, BitVectorRadix::Hexadecimal);
-                }
-                NetlistViewerRequest::Insert(path, variable) => {
-                    insert_path = self.browser_request_insert(path, variable, insert_path);
-
-                    // let mut select_offset = self.tree_select.get_primary_selected();
-                    // let selected = self.tree.get_selected_mut(&mut select_offset);
-                    // let selected = match selected {
-                    //     Some(selected) => selected,
-                    //     None => return,
-                    // };
-                }
-            }
-        }
         self.push_request();
     }
 
@@ -172,40 +135,6 @@ impl SignalViewerState {
         self.browser
             .set_height((size.height as isize - margin).max(0));
         self.browser.scroll_relative(&self.node, 0);
-        self.push_request();
-    }
-
-    pub fn handle_key_press(&mut self, event: KeyEvent) {
-        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-        match event.code {
-            KeyCode::Up => self.browser.select_relative(&self.node, -1, !shift),
-            KeyCode::Down => self.browser.select_relative(&self.node, 1, !shift),
-            KeyCode::PageDown => self.browser.select_relative(&self.node, 20, !shift),
-            KeyCode::PageUp => self.browser.select_relative(&self.node, -20, !shift),
-            KeyCode::Enter => self.modify(ListAction::Expand),
-            KeyCode::Char('g') => self.modify(ListAction::Group),
-            KeyCode::Char('f') => {
-                self.browser
-                    .set_indent_enabled(!self.browser.is_full_name_enabled());
-                self.browser
-                    .set_full_name_enabled(!self.browser.is_full_name_enabled());
-            }
-            KeyCode::Delete => self.modify(ListAction::Delete),
-            _ => {}
-        }
-        self.push_request();
-    }
-
-    pub fn handle_mouse_click(&mut self, _: u16, y: u16) {
-        if self.browser.select_absolute(&self.node, y as isize, true) {
-            self.modify(ListAction::Expand);
-        }
-        self.push_request();
-    }
-
-    pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
-        self.browser
-            .select_relative(&self.node, if scroll_up { -5 } else { 5 }, true);
         self.push_request();
     }
 
@@ -267,34 +196,68 @@ impl SignalViewerState {
                 _ => None,
             });
         }
-        self.requests.push(SignalViewerRequest(request));
-    }
-
-    pub fn get_requests(&mut self) -> Vec<SignalViewerRequest> {
-        let mut requests = Vec::new();
-        std::mem::swap(&mut requests, &mut self.requests);
-        requests
-    }
-}
-
-impl Default for SignalViewerState {
-    fn default() -> Self {
-        Self::new()
+        self.messages
+            .push(WaveformViewerMessage::UpdateSignals(request.clone()));
     }
 }
 
 impl ComponentWidget for SignalViewerState {
-    fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind) {
+    fn handle_mouse(&mut self, _x: u16, y: u16, kind: MouseEventKind) -> bool {
         match kind {
-            MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_click(x, y),
-            MouseEventKind::ScrollDown => self.handle_mouse_scroll(false),
-            MouseEventKind::ScrollUp => self.handle_mouse_scroll(true),
-            _ => {}
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.browser.select_absolute(&self.node, y as isize, true) {
+                    self.modify(ListAction::Expand);
+                }
+                self.push_request();
+            }
+            MouseEventKind::ScrollDown => {
+                self.browser.select_relative(&self.node, 5, true);
+                self.push_request();
+            }
+            MouseEventKind::ScrollUp => {
+                self.browser.select_relative(&self.node, -5, true);
+                self.push_request();
+            }
+            _ => return false,
         }
+        true
     }
 
-    fn handle_key(&mut self, e: KeyEvent) {
-        self.handle_key_press(e);
+    fn handle_key(&mut self, e: KeyEvent) -> bool {
+        let shift = e.modifiers.contains(KeyModifiers::SHIFT);
+        match e.code {
+            KeyCode::Up => self.browser.select_relative(&self.node, -1, !shift),
+            KeyCode::Down => self.browser.select_relative(&self.node, 1, !shift),
+            KeyCode::PageDown => self.browser.select_relative(&self.node, 20, !shift),
+            KeyCode::PageUp => self.browser.select_relative(&self.node, -20, !shift),
+            KeyCode::Enter => self.modify(ListAction::Expand),
+            KeyCode::Char('g') => self.modify(ListAction::Group),
+            KeyCode::Char('f') => {
+                self.browser
+                    .set_indent_enabled(!self.browser.is_full_name_enabled());
+                self.browser
+                    .set_full_name_enabled(!self.browser.is_full_name_enabled());
+            }
+            KeyCode::Delete => self.modify(ListAction::Delete),
+            _ => return false,
+        }
+        self.push_request();
+        true
+    }
+
+    fn handle_update(&mut self) -> bool {
+        let mut updated = false;
+        for message in self.messages.get::<SignalViewerMessage>() {
+            match message {
+                SignalViewerMessage::NetlistAppend(path, variable) => {
+                    self.browser_request_append(path, variable, BitVectorRadix::Hexadecimal);
+                    updated = true;
+                }
+                SignalViewerMessage::NetlistInsert(_, _) => {}
+                SignalViewerMessage::WaveformKey(e) => updated |= self.handle_key(e),
+            }
+        }
+        updated
     }
 
     fn resize(&mut self, width: u16, height: u16) {

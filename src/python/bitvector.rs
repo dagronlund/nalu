@@ -1,7 +1,7 @@
 use num_bigint::BigUint;
 use pyo3::prelude::*;
 
-use waveform_db::bitvector::{BitVector, Logic};
+use makai_waveform_db::bitvector::{BitVector, Logic};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass]

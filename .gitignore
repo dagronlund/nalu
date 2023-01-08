@@ -1,2 +1,4 @@
 /target
 /tmp
+**/.nalu.log
+**/.nalu.py

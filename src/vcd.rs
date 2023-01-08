@@ -8,7 +8,7 @@ use crossbeam::channel::bounded;
 
 use vcd_parser::errors::*;
 use vcd_parser::lexer::{position::LexerPosition, Lexer, LexerToken};
-use vcd_parser::parser::{VcdEntry, VcdHeader, VcdParser};
+use vcd_parser::parser::{VcdEntry, VcdHeader, VcdReader};
 use vcd_parser::tokenizer::Tokenizer;
 use vcd_parser::waveform::{errors::*, Waveform};
 
@@ -60,7 +60,7 @@ pub fn load_vcd(
         // Create a tokenizer and parser for the file
         let mut lexer = Lexer::new(&bytes);
         let mut tokenizer = Tokenizer::new(&bytes);
-        let mut parser = VcdParser::new();
+        let mut parser = VcdReader::new();
         let mut waveform = Waveform::new();
         *status.lock().unwrap() = (lexer.get_position().get_index(), file_size);
         parser.parse_header(&mut |bs| tokenizer.next(lexer.next()?, bs))?;

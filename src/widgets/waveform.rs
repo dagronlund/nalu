@@ -1,7 +1,9 @@
 use std::ops::Range;
 
-use waveform_db::bitvector::{BitVectorRadix, Logic};
-use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
+use makai_waveform_db::{
+    bitvector::{BitVectorRadix, Logic},
+    Waveform, WaveformSearchMode, WaveformValueResult,
+};
 
 use tui::{
     buffer::Buffer,
@@ -258,7 +260,7 @@ fn signal_render_test() {
     // Read VCD file header and build out waveform structure
     let bytes = std::fs::read_to_string(fname).unwrap();
     let status = Arc::new(Mutex::new((0, 0)));
-    let handle = vcd_parser::utils::load_multi_threaded(bytes, 4, status.clone());
+    let handle = makai_vcd_reader::utils::load_multi_threaded(bytes, 4, status.clone());
     loop {
         let (pos, total) = *status.lock().unwrap();
         if pos >= total && total > 0 {

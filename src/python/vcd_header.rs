@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use vcd_parser::parser::{VcdHeader, VcdVariable};
+use makai_vcd_reader::parser::{VcdHeader, VcdVariable};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass]

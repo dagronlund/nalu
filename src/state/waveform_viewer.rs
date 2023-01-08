@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
+use makai::utils::messages::Messages;
+use makai_vcd_reader::parser::VcdHeader;
+use makai_waveform_db::Waveform;
 use tui::{
     buffer::Buffer,
     layout::Rect,
@@ -9,16 +12,19 @@ use tui::{
     text::Spans,
     widgets::{Block, Paragraph, Widget},
 };
-use tui_layout::component::ComponentWidget;
+use tui_tiling::component::ComponentWidget;
 
-use vcd_parser::parser::VcdHeader;
-use waveform_db::Waveform;
+use crate::{
+    state::signal_viewer::SignalViewerEntry,
+    state::signal_viewer::SignalViewerMessage,
+    widgets::timescale::{Timescale, TimescaleState},
+    widgets::waveform::WaveformWidget,
+};
 
-use crate::signal_viewer::{SignalViewerEntry, SignalViewerRequest};
-use crate::widgets::timescale::*;
-use crate::widgets::waveform::*;
-
-pub struct WaveformViewerRequest(pub KeyEvent);
+pub(crate) enum WaveformViewerMessage {
+    UpdateSignals(Vec<Option<SignalViewerEntry>>),
+    UpdateWaveform(Arc<Waveform>, Arc<VcdHeader>, i32, Option<PathBuf>),
+}
 
 pub struct WaveformViewerState {
     width: usize,
@@ -27,13 +33,13 @@ pub struct WaveformViewerState {
     vcd_header: Arc<VcdHeader>,
     timescale_state: TimescaleState,
     signal_entries: Vec<Option<SignalViewerEntry>>,
-    requests: Vec<WaveformViewerRequest>,
     python_view: bool,
     python_path: Option<PathBuf>,
+    messages: Messages,
 }
 
 impl WaveformViewerState {
-    pub fn new() -> Self {
+    pub fn new(messages: Messages) -> Self {
         Self {
             width: 0,
             height: 0,
@@ -41,9 +47,9 @@ impl WaveformViewerState {
             vcd_header: Arc::new(VcdHeader::default()),
             timescale_state: TimescaleState::new(),
             signal_entries: Vec::new(),
-            requests: Vec::new(),
             python_view: false,
             python_path: None,
+            messages,
         }
     }
 
@@ -69,29 +75,6 @@ impl WaveformViewerState {
             0
         };
         self.height = size.height as usize;
-    }
-
-    pub fn handle_key_press(&mut self, event: KeyEvent) {
-        match event.code {
-            KeyCode::Char('v') => self.python_view = !self.python_view,
-            KeyCode::Char('-') => self.timescale_state.zoom_out(false),
-            KeyCode::Char('=') => self.timescale_state.zoom_in(false),
-            KeyCode::Char('[') => self.timescale_state.zoom_left(false),
-            KeyCode::Char(']') => self.timescale_state.zoom_right(false),
-            KeyCode::Char('_') => self.timescale_state.zoom_out(true),
-            KeyCode::Char('+') => self.timescale_state.zoom_in(true),
-            KeyCode::Char('{') => self.timescale_state.zoom_left(true),
-            KeyCode::Char('}') => self.timescale_state.zoom_right(true),
-            KeyCode::Up
-            | KeyCode::Down
-            | KeyCode::PageDown
-            | KeyCode::PageUp
-            | KeyCode::Enter
-            | KeyCode::Char('g')
-            | KeyCode::Char('f')
-            | KeyCode::Delete => self.requests.push(WaveformViewerRequest(event)),
-            _ => {}
-        }
     }
 
     fn get_waveform_widget(&self) -> WaveformViewerWidget<'_> {
@@ -164,12 +147,6 @@ impl WaveformViewerState {
         }
     }
 
-    pub fn signal_request(&mut self, requests: Vec<SignalViewerRequest>) {
-        for request in requests {
-            self.signal_entries = request.0;
-        }
-    }
-
     // fn modify_list(&mut self, action: ListAction) {
     //     // let mut select_offset = self.tree_select.get_primary_selected();
 
@@ -194,18 +171,6 @@ impl WaveformViewerState {
     //         }
     //     }
     // }
-
-    pub fn get_requests(&mut self) -> Vec<WaveformViewerRequest> {
-        let mut requests = Vec::new();
-        std::mem::swap(&mut requests, &mut self.requests);
-        requests
-    }
-}
-
-impl Default for WaveformViewerState {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 pub struct WaveformViewerWidget<'a> {
@@ -265,10 +230,55 @@ impl<'a> Widget for WaveformViewerWidget<'a> {
 }
 
 impl ComponentWidget for WaveformViewerState {
-    fn handle_mouse(&mut self, _x: u16, _y: u16, _kind: MouseEventKind) {}
+    fn handle_mouse(&mut self, _x: u16, _y: u16, _kind: MouseEventKind) -> bool {
+        false
+    }
 
-    fn handle_key(&mut self, e: KeyEvent) {
-        self.handle_key_press(e);
+    fn handle_key(&mut self, e: KeyEvent) -> bool {
+        match e.code {
+            KeyCode::Char('v') => self.python_view = !self.python_view,
+            KeyCode::Char('-') => self.timescale_state.zoom_out(false),
+            KeyCode::Char('=') => self.timescale_state.zoom_in(false),
+            KeyCode::Char('[') => self.timescale_state.zoom_left(false),
+            KeyCode::Char(']') => self.timescale_state.zoom_right(false),
+            KeyCode::Char('_') => self.timescale_state.zoom_out(true),
+            KeyCode::Char('+') => self.timescale_state.zoom_in(true),
+            KeyCode::Char('{') => self.timescale_state.zoom_left(true),
+            KeyCode::Char('}') => self.timescale_state.zoom_right(true),
+            KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::PageDown
+            | KeyCode::PageUp
+            | KeyCode::Enter
+            | KeyCode::Char('g')
+            | KeyCode::Char('f')
+            | KeyCode::Delete => {
+                self.messages.push(SignalViewerMessage::WaveformKey(e));
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_update(&mut self) -> bool {
+        let mut updated = false;
+        for message in self.messages.get::<WaveformViewerMessage>() {
+            match message {
+                WaveformViewerMessage::UpdateSignals(signals) => {
+                    self.signal_entries = signals;
+                }
+                WaveformViewerMessage::UpdateWaveform(
+                    waveform,
+                    vcd_header,
+                    timescale,
+                    python_path,
+                ) => {
+                    self.load_waveform(waveform, vcd_header, timescale, python_path);
+                }
+            }
+            updated = true;
+        }
+        updated
     }
 
     fn resize(&mut self, width: u16, height: u16) {

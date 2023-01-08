@@ -1,15 +1,20 @@
 [package]
 name = "nalu"
 version = "0.1.0"
+authors = ["David Gronlund"]
 edition = "2021"
-description = "A fast command line tool for viewing and verifying VCD waveform files."
+description = "TUI-based waveform viewer"
+readme = "README.md"
+repository = "https://github.com/dagronlund/nalu"
+license = "MIT"
+keywords = ["eda", "waveform", "vcd", "tui"]
 
 [dependencies]
 crossbeam = "0.8.1"
 bytes = "1.1.0"
 num-bigint = "0.4.3" # TODO: Replace with native BitVector-python conversion
 log = "0.4.0"
-simple_logger = "1.11.0"
+simple-logging = "2.0.2"
 humansize = "1.1.1"
 alphanumeric-sort = "1.4.4"
 crossterm = "0.25.0"
@@ -18,10 +23,10 @@ tui = "0.19.0"
 lazy_static = "1.4.0"
 backtrace = "0.3.67"
 indiscriminant = "0.2.0"
-byte_storage = { path = "../byte_storage" }
-vcd_parser = { path = "../vcd_parser" }
-waveform_db = { path = "../waveform_db" }
-tui_layout = { path = "../tui_layout" }
+makai = "0.1.0"
+makai_waveform_db = "0.1.0"
+makai_vcd_reader = "0.1.0"
+tui_tiling = "0.1.0"
 
 [dependencies.pyo3]
 version = "0.17.3"

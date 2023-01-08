@@ -1,18 +1,21 @@
 use lazy_static::*;
 
-use tui::widgets::Widget;
-use vcd_parser::parser::*;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use makai::utils::messages::Messages;
+use makai_vcd_reader::parser::{VcdScope, VcdVariable};
+use tui::widgets::Widget;
 use tui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
 };
-use tui_layout::component::ComponentWidget;
+use tui_tiling::component::ComponentWidget;
 
-use crate::state::filter::*;
-use crate::widgets::browser::*;
+use crate::{
+    state::filter::{construct_filter, BrowserFilterSection},
+    state::signal_viewer::SignalViewerMessage,
+    widgets::browser::{Browser, BrowserNode, BrowserState},
+};
 
 #[derive(Clone)]
 pub enum NetlistNode {
@@ -103,9 +106,8 @@ enum NetlistViewerAction {
     Expand,
 }
 
-pub enum NetlistViewerRequest {
-    Append(Vec<String>, VcdVariable),
-    Insert(Vec<String>, VcdVariable),
+pub(crate) enum NetlistViewerMessage {
+    UpdateScopes(Vec<VcdScope>),
 }
 
 pub struct NetlistViewerState {
@@ -113,17 +115,17 @@ pub struct NetlistViewerState {
     node: BrowserNode<NetlistNode>,
     filters: Vec<BrowserFilterSection>,
     border_width: u16,
-    requests: Vec<NetlistViewerRequest>,
+    messages: Messages,
 }
 
 impl NetlistViewerState {
-    pub fn new() -> Self {
+    pub fn new(messages: Messages) -> Self {
         Self {
             state: BrowserState::new(true, true, false),
             node: BrowserNode::from_expanded(None, true, Vec::new()),
             filters: Vec::new(),
             border_width: 1,
-            requests: Vec::new(),
+            messages,
         }
     }
 
@@ -131,7 +133,7 @@ impl NetlistViewerState {
         self.filters = construct_filter(filter);
     }
 
-    pub fn update_scopes(&mut self, new_scopes: &[VcdScope]) {
+    fn update_scopes(&mut self, new_scopes: &[VcdScope]) {
         // Set new scopes and clear the selected item
         self.node = generate_new_nodes(&self.node, new_scopes);
         self.state.select_relative(&self.node, 0, true);
@@ -143,37 +145,6 @@ impl NetlistViewerState {
         self.state
             .set_height((size.height as isize - margin).max(0));
         self.state.scroll_relative(&self.node, 0);
-    }
-
-    pub fn handle_key_press(&mut self, event: KeyEvent) {
-        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-        match event.code {
-            KeyCode::Up => self.state.select_relative(&self.node, -1, !shift),
-            KeyCode::Down => self.state.select_relative(&self.node, 1, !shift),
-            KeyCode::PageDown => self.state.select_relative(&self.node, 20, !shift),
-            KeyCode::PageUp => self.state.select_relative(&self.node, -20, !shift),
-            KeyCode::Enter => self.modify(NetlistViewerAction::Expand),
-            KeyCode::Char('a') => self.modify(NetlistViewerAction::Append),
-            KeyCode::Char('i') => self.modify(NetlistViewerAction::Insert),
-            KeyCode::Char('f') => {
-                self.state
-                    .set_indent_enabled(!self.state.is_full_name_enabled());
-                self.state
-                    .set_full_name_enabled(!self.state.is_full_name_enabled());
-            }
-            _ => {}
-        }
-    }
-
-    pub fn handle_mouse_click(&mut self, _: u16, y: u16) {
-        if self.state.select_absolute(&self.node, y as isize, true) {
-            self.modify(NetlistViewerAction::Expand);
-        }
-    }
-
-    pub fn handle_mouse_scroll(&mut self, scroll_up: bool) {
-        self.state
-            .select_relative(&self.node, if scroll_up { -5 } else { 5 }, true);
     }
 
     pub fn get_browser(&self) -> Browser<'_, NetlistNode> {
@@ -196,19 +167,19 @@ impl NetlistViewerState {
     }
 
     fn modify(&mut self, action: NetlistViewerAction) {
-        let mut requests = match action {
+        let requests = match action {
             NetlistViewerAction::Append => self
                 .get_selected_variables()
                 .iter()
                 .map(|(full_name, variable)| {
-                    NetlistViewerRequest::Append(full_name.clone(), variable.clone())
+                    SignalViewerMessage::NetlistAppend(full_name.clone(), variable.clone())
                 })
                 .collect(),
             NetlistViewerAction::Insert => self
                 .get_selected_variables()
                 .iter()
                 .map(|(full_name, variable)| {
-                    NetlistViewerRequest::Insert(full_name.clone(), variable.clone())
+                    SignalViewerMessage::NetlistInsert(full_name.clone(), variable.clone())
                 })
                 .collect(),
             NetlistViewerAction::Expand => {
@@ -219,34 +190,57 @@ impl NetlistViewerState {
                 Vec::new()
             }
         };
-        self.requests.append(&mut requests);
-    }
-
-    pub fn get_requests(&mut self) -> Vec<NetlistViewerRequest> {
-        let mut requests = Vec::new();
-        std::mem::swap(&mut requests, &mut self.requests);
-        requests
-    }
-}
-
-impl Default for NetlistViewerState {
-    fn default() -> Self {
-        Self::new()
+        self.messages.append(requests);
     }
 }
 
 impl ComponentWidget for NetlistViewerState {
-    fn handle_mouse(&mut self, x: u16, y: u16, kind: MouseEventKind) {
+    fn handle_mouse(&mut self, _x: u16, y: u16, kind: MouseEventKind) -> bool {
         match kind {
-            MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_click(x, y),
-            MouseEventKind::ScrollDown => self.handle_mouse_scroll(false),
-            MouseEventKind::ScrollUp => self.handle_mouse_scroll(true),
-            _ => {}
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.state.select_absolute(&self.node, y as isize, true) {
+                    self.modify(NetlistViewerAction::Expand);
+                }
+            }
+            MouseEventKind::ScrollDown => self.state.select_relative(&self.node, 5, true),
+            MouseEventKind::ScrollUp => self.state.select_relative(&self.node, -5, true),
+            _ => return false,
         }
+        true
     }
 
-    fn handle_key(&mut self, e: KeyEvent) {
-        self.handle_key_press(e);
+    fn handle_key(&mut self, e: KeyEvent) -> bool {
+        let shift = e.modifiers.contains(KeyModifiers::SHIFT);
+        match e.code {
+            KeyCode::Up => self.state.select_relative(&self.node, -1, !shift),
+            KeyCode::Down => self.state.select_relative(&self.node, 1, !shift),
+            KeyCode::PageDown => self.state.select_relative(&self.node, 20, !shift),
+            KeyCode::PageUp => self.state.select_relative(&self.node, -20, !shift),
+            KeyCode::Enter => self.modify(NetlistViewerAction::Expand),
+            KeyCode::Char('a') => self.modify(NetlistViewerAction::Append),
+            KeyCode::Char('i') => self.modify(NetlistViewerAction::Insert),
+            KeyCode::Char('f') => {
+                self.state
+                    .set_indent_enabled(!self.state.is_full_name_enabled());
+                self.state
+                    .set_full_name_enabled(!self.state.is_full_name_enabled());
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_update(&mut self) -> bool {
+        let mut updated = false;
+        for message in self.messages.get::<NetlistViewerMessage>() {
+            match message {
+                NetlistViewerMessage::UpdateScopes(scopes) => {
+                    self.update_scopes(&scopes);
+                    updated = true;
+                }
+            }
+        }
+        updated
     }
 
     fn resize(&mut self, width: u16, height: u16) {

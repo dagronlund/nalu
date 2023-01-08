@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
+use makai_waveform_db::{Waveform, WaveformSearchMode, WaveformValueResult};
 
 use crate::python::bitvector::BitVectorPy;
 

@@ -1,3 +1,4 @@
+pub mod logging;
 pub mod python;
 pub mod state;
 pub mod widgets;
@@ -15,6 +16,7 @@ use crossterm::{
     tty::IsTty,
     QueueableCommand, Result as CrosstermResult,
 };
+use makai::utils::messages::Messages;
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Direction, Rect},
@@ -22,16 +24,19 @@ use tui::{
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame, Terminal,
 };
-use tui_layout::{
+use tui_tiling::{
     component::{simple::ComponentWidgetSimple, Component, ComponentBaseWidget},
-    container::{list::ContainerList, search::ContainerSearch, Container},
+    container::{list::ContainerList, Container, ContainerChild},
     ResizeError,
 };
 
-use crate::state::netlist_viewer::NetlistViewerState;
-use crate::state::signal_viewer::SignalViewerState;
-use crate::state::waveform_viewer::WaveformViewerState;
-use crate::state::*;
+use crate::{
+    logging::FrameTimestamps,
+    state::netlist_viewer::NetlistViewerState,
+    state::signal_viewer::SignalViewerState,
+    state::waveform_viewer::WaveformViewerState,
+    state::{NaluOverlay, NaluState},
+};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -51,52 +56,60 @@ fn spawn_input_listener(tx: Sender<CrosstermEvent>) {
     });
 }
 
-fn get_tui() -> Result<Box<dyn Container>, ResizeError> {
-    let mut netlist_main =
-        ContainerList::new("netlist_main".to_string(), Direction::Vertical, false, 0, 0);
-    netlist_main.add_component(Component::new(
-        "netlist".to_string(),
-        1,
-        Box::new(NetlistViewerState::new()),
-    ))?;
-    let mut netlist_filter = Component::new(
-        "filter".to_string(),
-        1,
-        Box::new(ComponentWidgetSimple::new().text("TODO: Filter".to_string())),
-    );
-    netlist_filter.set_fixed_height(Some(3));
-    netlist_main.add_component(netlist_filter)?;
+fn get_tui(messages: &Messages) -> Result<Box<dyn Container>, ResizeError> {
+    let netlist_main =
+        ContainerList::new("netlist_main".to_string(), Direction::Vertical, false, 0, 0)
+            .from_children(vec![
+                ContainerChild::from(Component::new(
+                    "netlist".to_string(),
+                    1,
+                    Box::new(NetlistViewerState::new(messages.clone())),
+                )),
+                ContainerChild::from(
+                    Component::new(
+                        "filter".to_string(),
+                        1,
+                        Box::new(ComponentWidgetSimple::new().text("TODO: Filter".to_string())),
+                    )
+                    .fixed_height(Some(3)),
+                ),
+            ])?;
 
-    let mut main = ContainerList::new("main".to_string(), Direction::Horizontal, true, 0, 0);
-    main.add_container(Box::new(netlist_main))?;
-    main.add_component(Component::new(
-        "signal".to_string(),
-        1,
-        Box::new(SignalViewerState::new()),
-    ))?;
-    main.add_component(Component::new(
-        "waveform".to_string(),
-        1,
-        Box::new(WaveformViewerState::new()),
-    ))?;
+    let main = ContainerList::new("main".to_string(), Direction::Horizontal, true, 0, 0)
+        .from_children(vec![
+            ContainerChild::from(netlist_main),
+            ContainerChild::from(Component::new(
+                "signal".to_string(),
+                1,
+                Box::new(SignalViewerState::new(messages.clone())),
+            )),
+            ContainerChild::from(Component::new(
+                "waveform".to_string(),
+                1,
+                Box::new(WaveformViewerState::new(messages.clone())),
+            )),
+        ])?;
 
-    let mut nalu = ContainerList::new("nalu".to_string(), Direction::Vertical, false, 0, 0);
-    let mut header = Component::new(
-        "header".to_string(),
-        0,
-        Box::new(
-            ComponentWidgetSimple::new()
-                .text(format!(
-                    "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
-                    option_env!("CARGO_PKG_VERSION").unwrap_or("0.0.0")
-                ))
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Left),
-        ),
-    );
-    header.set_fixed_height(Some(1));
-    nalu.add_component(header)?;
-    nalu.add_container(Box::new(main))?;
+    let nalu = ContainerList::new("nalu".to_string(), Direction::Vertical, false, 0, 0)
+        .from_children(vec![
+            ContainerChild::from(
+                Component::new(
+                    "header".to_string(),
+                    0,
+                    Box::new(
+                        ComponentWidgetSimple::new()
+                            .text(format!(
+                            "nalu v{} (Press h for help, p for palette, r to reload, q to quit)",
+                            option_env!("CARGO_PKG_VERSION").unwrap_or("0.0.0")
+                        ))
+                            .style(Style::default().fg(Color::LightCyan))
+                            .alignment(Alignment::Left),
+                    ),
+                )
+                .fixed_height(Some(1)),
+            ),
+            ContainerChild::from(main),
+        ])?;
 
     Ok(Box::new(nalu))
 }
@@ -196,58 +209,22 @@ fn cleanup_terminal_force() -> CrosstermResult<()> {
     cleanup_terminal(&mut Terminal::new(CrosstermBackend::new(stdout()))?)
 }
 
-#[derive(Debug)]
-pub struct FrameDuration {
-    start: Instant,
-    sections: Vec<(String, Duration)>,
-}
-
-impl FrameDuration {
-    pub fn new() -> Self {
-        Self {
-            start: Instant::now(),
-            sections: Vec::new(),
-        }
-    }
-
-    pub fn timestamp(&mut self, name: String) {
-        let duration = self.start.elapsed();
-        self.sections.push((name, duration));
-        self.start = Instant::now();
-    }
-
-    pub fn total(&self) -> Duration {
-        let mut total = Duration::new(0, 0);
-        for (_, d) in &self.sections {
-            total += *d;
-        }
-        total
-    }
-}
-
-impl Default for FrameDuration {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResult<String> {
-    use std::collections::VecDeque;
-
-    // Setup event listeners
     let args = NaluArgs::parse();
-    let mut tui = get_tui().unwrap();
+
     let mut nalu_state = NaluState::new(
         PathBuf::from(args.vcd_file.clone()),
         args.python.map(PathBuf::from),
     );
+    let mut tui = get_tui(nalu_state.get_messages()).unwrap();
+    nalu_state.handle_load();
+
+    // Setup event listeners
     let (tx_input, rx_input) = unbounded();
     spawn_input_listener(tx_input);
 
-    let mut durations: VecDeque<FrameDuration> = VecDeque::new();
-
     loop {
-        let mut frame_duration = FrameDuration::new();
+        let mut frame_duration = FrameTimestamps::new();
         let frame_start = Instant::now();
 
         terminal.draw(|frame| {
@@ -256,6 +233,7 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
                 .as_base_mut()
                 .resize(frame.size().width, frame.size().height)
             {
+                log::error!("Resizing Error! ({err:?})");
                 panic!("Resizing Error! ({err:?})");
             }
             frame.render_stateful_widget(
@@ -289,50 +267,16 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
         }
         frame_duration.timestamp(String::from("input"));
 
-        // Handle requests between components
-        let netlist_viewer_requests = tui
-            .as_container_mut()
-            .search_name_widget_mut::<NetlistViewerState>("main.netlist_main.netlist")
-            .unwrap()
-            .get_requests();
-        let signal_viewer_requests = tui
-            .as_container_mut()
-            .search_name_widget_mut::<SignalViewerState>("main.signal")
-            .unwrap()
-            .get_requests();
-        let waveform_viewer_requests = tui
-            .as_container_mut()
-            .search_name_widget_mut::<WaveformViewerState>("main.waveform")
-            .unwrap()
-            .get_requests();
-
-        for request in waveform_viewer_requests {
-            tui.as_container_mut()
-                .search_name_widget_mut::<SignalViewerState>("main.signal")
-                .unwrap()
-                .handle_key_press(request.0);
+        // Handle any updates
+        nalu_state.handle_vcd();
+        while !nalu_state.get_messages().is_empty() {
+            tui.as_base_mut().handle_update();
         }
-        tui.as_container_mut()
-            .search_name_widget_mut::<SignalViewerState>("main.signal")
-            .unwrap()
-            .browser_request(netlist_viewer_requests);
-        tui.as_container_mut()
-            .search_name_widget_mut::<WaveformViewerState>("main.waveform")
-            .unwrap()
-            .signal_request(signal_viewer_requests);
-        frame_duration.timestamp(String::from("requests"));
-
-        nalu_state.handle_vcd(&mut tui);
-        frame_duration.timestamp(String::from("vcd"));
-
         if let Some(msg) = nalu_state.get_done() {
             cleanup_terminal(terminal)?;
-            // for d in durations {
-            //     println!("{:?}, (Total: {:?})", d.sections, d.total());
-            // }
             return Ok(msg);
         }
-        frame_duration.timestamp(String::from("check"));
+        frame_duration.timestamp(String::from("updates"));
 
         // Sleep for unused frame time
         let frame_target = Duration::from_millis(20);
@@ -342,10 +286,11 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
         }
         frame_duration.timestamp(String::from("sleep"));
 
-        if durations.len() >= 2 {
-            durations.pop_front();
-        }
-        durations.push_back(frame_duration);
+        log::trace!(
+            "Frame: {:?}, (Total: {:?})",
+            frame_duration.get_sections(),
+            frame_duration.total()
+        );
     }
 }
 
@@ -366,6 +311,9 @@ fn main() -> CrosstermResult<()> {
         println!("Error: Cannot open viewer when not TTY!");
         return Ok(());
     }
+
+    simple_logging::log_to_file(".nalu.log", log::LevelFilter::Info)?;
+    log::info!("Starting Nalu...");
 
     std::panic::set_hook(Box::new(|_| {
         let trace = Backtrace::new();
