@@ -4,26 +4,33 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyEvent, MouseEventKind};
 use makai::utils::messages::Messages;
 use makai_vcd_reader::parser::VcdHeader;
-use makai_waveform_db::Waveform;
+use makai_waveform_db::{bitvector::BitVectorRadix, Waveform};
 use tui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::Spans,
     widgets::{Block, Paragraph, Widget},
 };
 use tui_tiling::component::ComponentWidget;
 
 use crate::{
-    state::signal_viewer::SignalViewerEntry,
+    python::utils::run_interactive,
     state::signal_viewer::SignalViewerMessage,
     widgets::timescale::{Timescale, TimescaleState},
     widgets::waveform::WaveformWidget,
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct WaveformNode {
+    pub(crate) idcode: usize,
+    pub(crate) index: Option<usize>,
+    pub(crate) radix: BitVectorRadix,
+    pub(crate) is_selected: bool,
+}
+
 pub(crate) enum WaveformViewerMessage {
-    UpdateSignals(Vec<Option<SignalViewerEntry>>),
-    UpdateWaveform(Arc<Waveform>, Arc<VcdHeader>, i32, Option<PathBuf>),
+    UpdateSignals(Vec<Option<WaveformNode>>),
+    WaveformUpdate(Arc<Waveform>, Arc<VcdHeader>, i32, Option<PathBuf>),
 }
 
 pub struct WaveformViewerState {
@@ -32,7 +39,7 @@ pub struct WaveformViewerState {
     waveform: Arc<Waveform>,
     vcd_header: Arc<VcdHeader>,
     timescale_state: TimescaleState,
-    signal_entries: Vec<Option<SignalViewerEntry>>,
+    signal_entries: Vec<Option<WaveformNode>>,
     python_view: bool,
     python_path: Option<PathBuf>,
     messages: Messages,
@@ -103,74 +110,21 @@ impl WaveformViewerState {
     }
 
     fn get_python_widget(&self) -> Paragraph<'_> {
-        use crate::python::{buffer::*, vcd_header::*, waveform::*};
-        use pyo3::prelude::*;
-
         let Some(python_path) = self.python_path.clone() else {
             return Paragraph::new("No python loaded!");
         };
-
-        let result: PyResult<BufferPy> = Python::with_gil(|py| {
-            let nalu = PyModule::new(py, "nalu")?;
-            nalu.add_class::<crate::python::waveform::WaveformSearchModePy>()?;
-            py.import("sys")?
-                .getattr("modules")?
-                .set_item("nalu", nalu)?;
-
-            let python_bytes = std::fs::read(python_path)?;
-            let python_file = String::from_utf8_lossy(&python_bytes);
-            let main: Py<PyAny> = PyModule::from_code(py, &python_file, "", "")?
-                .getattr("main")?
-                .into();
-
-            let buffer = BufferPy::new(self.width as u16, self.height as u16);
-            let waveform = WaveformPy::new(self.waveform.clone());
-            let vcd_header = VcdHeaderPy::new(self.vcd_header.clone());
-            let cursor = self.timescale_state.get_cursor();
-            main.call1(py, (buffer, waveform, vcd_header, cursor))?
-                .extract::<BufferPy>(py)
-        });
-
-        match result {
-            Ok(buffer) => {
-                let mut spans = Vec::new();
-                for y in 0..buffer.get_height() {
-                    let mut string = String::new();
-                    for x in 0..buffer.get_width() {
-                        string.push(buffer.get_cell(x, y));
-                    }
-                    spans.push(Spans::from(string.trim().to_string()));
-                }
-                Paragraph::new(spans)
-            }
+        match run_interactive(
+            python_path,
+            self.width as u16,
+            self.height as u16,
+            self.waveform.clone(),
+            self.vcd_header.clone(),
+            self.timescale_state.get_cursor(),
+        ) {
+            Ok(p) => p,
             Err(err) => Paragraph::new(format!("{err:#?}")),
         }
     }
-
-    // fn modify_list(&mut self, action: ListAction) {
-    //     // let mut select_offset = self.tree_select.get_primary_selected();
-
-    //     // let selected = match self.tree.get_selected_mut(&mut select_offset) {
-    //     //     Some((_, selected)) => selected,
-    //     //     None => return,
-    //     // };
-
-    //     // let variables = match selected.get_value() {
-    //     //     NodeValue::Variable(variable) => vec![variable.clone()],
-    //     //     NodeValue::Scope(_) => get_scope_variables(selected.get_nodes()),
-    //     // };
-
-    //     match action {
-    //         ListAction::Group => {}
-    //         ListAction::Delete => {}
-    //         ListAction::Expand => {
-    //             let path = self.list_state.get_primary_selected_path(&self.node);
-    //             if let Some(node) = self.node.get_node_mut(&path) {
-    //                 node.set_expanded(!node.is_expanded());
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 pub struct WaveformViewerWidget<'a> {
@@ -267,7 +221,7 @@ impl ComponentWidget for WaveformViewerState {
                 WaveformViewerMessage::UpdateSignals(signals) => {
                     self.signal_entries = signals;
                 }
-                WaveformViewerMessage::UpdateWaveform(
+                WaveformViewerMessage::WaveformUpdate(
                     waveform,
                     vcd_header,
                     timescale,

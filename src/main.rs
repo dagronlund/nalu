@@ -6,7 +6,7 @@ pub mod widgets;
 use std::io::{stdout, Stdout, Write};
 use std::path::PathBuf;
 use std::thread;
-use std::time::{self, Duration, Instant};
+use std::time::{self, Duration};
 
 use clap::Parser;
 use crossbeam::channel::{unbounded, Sender};
@@ -225,7 +225,6 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
 
     loop {
         let mut frame_duration = FrameTimestamps::new();
-        let frame_start = Instant::now();
 
         terminal.draw(|frame| {
             tui.as_base_mut().invalidate();
@@ -245,31 +244,23 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
         })?;
         frame_duration.timestamp(String::from("draw"));
 
+        // Wait while there is no input events and no message events
+        while rx_input.is_empty() && nalu_state.get_messages().is_empty() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        frame_duration.timestamp(String::from("sleep"));
+
+        // Handle input events (if any)
         while !rx_input.is_empty() {
-            match rx_input.recv().unwrap() {
-                CrosstermEvent::Key(key) => {
-                    if let Some(key) = nalu_state.handle_key(key) {
-                        tui.as_base_mut().handle_key(key);
-                    }
-                }
-                CrosstermEvent::Mouse(event) => {
-                    if let Some((x, y, kind)) =
-                        nalu_state.handle_mouse(event.column, event.row, event.kind)
-                    {
-                        tui.as_base_mut().handle_mouse(x, y, Some(kind));
-                    }
-                }
-                CrosstermEvent::Resize(_, _)
-                | CrosstermEvent::FocusGained
-                | CrosstermEvent::FocusLost
-                | CrosstermEvent::Paste(_) => {}
+            if let Some(event) = nalu_state.handle_input(rx_input.recv().unwrap()) {
+                tui.as_base_mut().handle_input(event);
             }
         }
         frame_duration.timestamp(String::from("input"));
 
-        // Handle any updates
-        nalu_state.handle_vcd();
+        // Handle message events
         while !nalu_state.get_messages().is_empty() {
+            nalu_state.handle_update();
             tui.as_base_mut().handle_update();
         }
         if let Some(msg) = nalu_state.get_done() {
@@ -277,14 +268,6 @@ fn nalu_main(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> CrosstermResu
             return Ok(msg);
         }
         frame_duration.timestamp(String::from("updates"));
-
-        // Sleep for unused frame time
-        let frame_target = Duration::from_millis(20);
-        let frame_elapsed = frame_start.elapsed();
-        if frame_elapsed < frame_target {
-            thread::sleep(frame_target - frame_start.elapsed());
-        }
-        frame_duration.timestamp(String::from("sleep"));
 
         log::trace!(
             "Frame: {:?}, (Total: {:?})",

@@ -251,24 +251,30 @@ impl<'a> Widget for WaveformWidget<'a> {
 
 #[test]
 fn signal_render_test() {
-    use std::sync::{Arc, Mutex};
+    use makai::utils::messages::Messages;
+    use makai_vcd_reader::utils::{load_multi_threaded, VcdLoaderMessage};
     use std::thread;
-    // use waveform_db::*;
 
     let fname = "res/gecko.vcd";
 
     // Read VCD file header and build out waveform structure
     let bytes = std::fs::read_to_string(fname).unwrap();
-    let status = Arc::new(Mutex::new((0, 0)));
-    let handle = makai_vcd_reader::utils::load_multi_threaded(bytes, 4, status.clone());
-    loop {
-        let (pos, total) = *status.lock().unwrap();
-        if pos >= total && total > 0 {
-            break;
+    let messages = Messages::new();
+    let handle = load_multi_threaded(bytes, 4, messages.clone());
+    let (header, waveform) = loop {
+        let mut result = None;
+        for messages in messages.get::<VcdLoaderMessage>() {
+            match messages {
+                VcdLoaderMessage::Done(r) => result = Some(r.unwrap()),
+                _ => {}
+            }
+        }
+        if let Some(result) = result {
+            break result;
         }
         thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let (header, waveform) = handle.join().unwrap().unwrap();
+    };
+    handle.join().unwrap();
 
     let timestamp_range = 0u64..100u64;
 

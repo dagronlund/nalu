@@ -16,7 +16,7 @@ import gecko_interactive
 def nalu_config(vcd_header):
     """Nalu generated waveform config"""
     return [
-        new_signal("TOP.clk", SignalRadix.Hexadecimal, False),
+        new_signal("TOP.exit_code[8]", SignalRadix.Hexadecimal, False, None),
     ]
 # fmt: on
 ### END NALU GENERATED CODE ###

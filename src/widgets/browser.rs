@@ -22,9 +22,15 @@ pub fn get_selected_style(is_selected: bool, is_primary: bool) -> Style {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Visibility {
+    Collapsed,
+    Expanded,
+}
+
 pub struct BrowserNode<E> {
     entry: Option<E>,
-    expanded: bool,
+    visibility: Visibility,
     children: Vec<BrowserNode<E>>,
 }
 
@@ -33,40 +39,48 @@ pub struct BrowserNodePath(Vec<usize>);
 
 #[allow(dead_code)]
 impl<E> BrowserNode<E> {
-    pub fn new(entry: Option<E>) -> Self {
+    pub fn new(entry: E) -> Self {
         Self {
-            entry,
-            expanded: false,
+            entry: Some(entry),
+            visibility: Visibility::Collapsed,
             children: Vec::new(),
         }
     }
 
-    pub fn from(entry: Option<E>, children: Vec<BrowserNode<E>>) -> Self {
+    pub fn new_container() -> Self {
+        Self {
+            entry: None,
+            visibility: Visibility::Expanded,
+            children: Vec::new(),
+        }
+    }
+
+    pub fn from(entry: Option<E>, visibility: Visibility, children: Vec<BrowserNode<E>>) -> Self {
         Self {
             entry,
-            expanded: false,
+            visibility,
             children,
         }
     }
 
-    pub fn from_expanded(entry: Option<E>, expanded: bool, children: Vec<BrowserNode<E>>) -> Self {
-        Self {
-            entry,
-            expanded,
-            children,
-        }
-    }
+    // pub fn from_expanded(entry: Option<E>, expanded: bool, children: Vec<BrowserNode<E>>) -> Self {
+    //     Self {
+    //         entry,
+    //         expanded,
+    //         children,
+    //     }
+    // }
 
     pub fn is_parent(&self) -> bool {
         !self.children.is_empty()
     }
 
-    pub fn is_expanded(&self) -> bool {
-        self.expanded
+    pub fn get_visibility(&self) -> Visibility {
+        self.visibility
     }
 
-    pub fn set_expanded(&mut self, expanded: bool) {
-        self.expanded = expanded;
+    pub fn set_visibility(&mut self, visibility: Visibility) {
+        self.visibility = visibility;
     }
 
     pub fn get_children(&self) -> &Vec<BrowserNode<E>> {
@@ -86,7 +100,7 @@ impl<E> BrowserNode<E> {
     }
 
     pub fn get_render_len(&self) -> usize {
-        (if self.expanded {
+        (if self.visibility == Visibility::Expanded {
             self.children
                 .iter()
                 .map(|c| c.get_render_len())
@@ -184,7 +198,7 @@ impl<E> Default for BrowserNode<E> {
     fn default() -> Self {
         Self {
             entry: None,
-            expanded: false,
+            visibility: Visibility::Collapsed,
             children: Vec::new(),
         }
     }
@@ -502,7 +516,7 @@ where
                 String::new()
             };
             let expander = if sub_node.is_parent() {
-                if sub_node.is_expanded() {
+                if sub_node.get_visibility() == Visibility::Expanded {
                     "[-] "
                 } else {
                     "[+] "
@@ -558,36 +572,44 @@ where
 fn browser_node_test() {
     let mut nodes = BrowserNode::from(
         None,
+        Visibility::Collapsed,
         vec![
             BrowserNode::from(
                 Some("A"),
+                Visibility::Collapsed,
                 vec![
                     BrowserNode::from(
                         Some("1"),
+                        Visibility::Collapsed,
                         vec![
-                            BrowserNode::from(Some("a"), vec![]),
-                            BrowserNode::from(Some("b"), vec![]),
+                            BrowserNode::from(Some("a"), Visibility::Collapsed, vec![]),
+                            BrowserNode::from(Some("b"), Visibility::Collapsed, vec![]),
                         ],
                     ),
-                    BrowserNode::from(Some("2"), vec![]),
+                    BrowserNode::from(Some("2"), Visibility::Collapsed, vec![]),
                 ],
             ),
-            BrowserNode::from(Some("B"), vec![BrowserNode::from(Some("1"), vec![])]),
+            BrowserNode::from(
+                Some("B"),
+                Visibility::Collapsed,
+                vec![BrowserNode::from(Some("1"), Visibility::Collapsed, vec![])],
+            ),
             BrowserNode::from(
                 Some("C"),
+                Visibility::Collapsed,
                 vec![
-                    BrowserNode::from(Some("1"), vec![]),
-                    BrowserNode::from(Some("2"), vec![]),
-                    BrowserNode::from(Some("3"), vec![]),
+                    BrowserNode::from(Some("1"), Visibility::Collapsed, vec![]),
+                    BrowserNode::from(Some("2"), Visibility::Collapsed, vec![]),
+                    BrowserNode::from(Some("3"), Visibility::Collapsed, vec![]),
                 ],
             ),
         ],
     );
-    nodes.set_expanded(true);
+    nodes.set_visibility(Visibility::Expanded);
 
     assert_eq!(nodes.get_render_len(), 3);
 
-    nodes[0].set_expanded(true);
+    nodes[0].set_visibility(Visibility::Expanded);
     assert_eq!(nodes.get_render_len(), 5);
 
     assert_eq!(nodes.get_path(0), BrowserNodePath(vec![0]));
@@ -610,7 +632,7 @@ fn browser_node_test() {
         vec![BrowserNodePath(vec![0]), BrowserNodePath(vec![1]),]
     );
 
-    nodes[0][0].set_expanded(true);
+    nodes[0][0].set_visibility(Visibility::Expanded);
     assert_eq!(nodes.get_path(2), BrowserNodePath(vec![0, 0, 0]));
 
     assert!(!BrowserNodePath(vec![]).contains(&BrowserNodePath(vec![])));
@@ -686,34 +708,42 @@ fn browser_node_test() {
 fn browser_render_test() {
     let mut nodes = BrowserNode::from(
         None,
+        Visibility::Collapsed,
         vec![
             BrowserNode::from(
                 Some("A"),
+                Visibility::Collapsed,
                 vec![
                     BrowserNode::from(
                         Some("1"),
+                        Visibility::Collapsed,
                         vec![
-                            BrowserNode::from(Some("a"), vec![]),
-                            BrowserNode::from(Some("b"), vec![]),
+                            BrowserNode::from(Some("a"), Visibility::Collapsed, vec![]),
+                            BrowserNode::from(Some("b"), Visibility::Collapsed, vec![]),
                         ],
                     ),
-                    BrowserNode::from(Some("2"), vec![]),
+                    BrowserNode::from(Some("2"), Visibility::Collapsed, vec![]),
                 ],
             ),
-            BrowserNode::from(Some("B"), vec![BrowserNode::from(Some("1"), vec![])]),
+            BrowserNode::from(
+                Some("B"),
+                Visibility::Collapsed,
+                vec![BrowserNode::from(Some("1"), Visibility::Collapsed, vec![])],
+            ),
             BrowserNode::from(
                 Some("C"),
+                Visibility::Collapsed,
                 vec![
-                    BrowserNode::from(Some("1"), vec![]),
-                    BrowserNode::from(Some("2"), vec![]),
-                    BrowserNode::from(Some("3"), vec![]),
+                    BrowserNode::from(Some("1"), Visibility::Collapsed, vec![]),
+                    BrowserNode::from(Some("2"), Visibility::Collapsed, vec![]),
+                    BrowserNode::from(Some("3"), Visibility::Collapsed, vec![]),
                 ],
             ),
         ],
     );
-    nodes.set_expanded(true);
-    nodes[0].set_expanded(true);
-    nodes[0][0].set_expanded(true);
+    nodes.set_visibility(Visibility::Expanded);
+    nodes[0].set_visibility(Visibility::Expanded);
+    nodes[0][0].set_visibility(Visibility::Expanded);
 
     let browser_state = BrowserState::new(true, true, true);
 

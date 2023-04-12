@@ -23,11 +23,14 @@ tui = "0.19.0"
 lazy_static = "1.4.0"
 backtrace = "0.3.67"
 indiscriminant = "0.2.0"
-makai = "0.1.0"
-makai_waveform_db = "0.1.0"
-makai_vcd_reader = "0.1.0"
-tui_tiling = "0.1.0"
+makai = {path = "../makai", version = "0.2.0"}
+makai_waveform_db = {path = "../makai_waveform_db", version = "0.1.0"}
+makai_vcd_reader = {path = "../makai_vcd_reader", version = "0.1.0"}
+tui_tiling = {path = "../tui_tiling", version = "0.2.0"}
 
 [dependencies.pyo3]
 version = "0.17.3"
 features = ["auto-initialize", "num-bigint"]
+
+[dev-dependencies]
+tempfile = "3.3.0"

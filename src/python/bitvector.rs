@@ -27,12 +27,14 @@ impl BitVectorPy {
 #[pymethods]
 impl BitVectorPy {
     #[pyo3(name = "get_value")]
-    fn get_value_py(self_: PyRef<'_, Self>) -> PyResult<BigUint> {
+    fn get_value_py(self_: PyRef<'_, Self>, strict: Option<bool>) -> PyResult<BigUint> {
+        let strict = strict.unwrap_or(true);
         let mut value = BigUint::default();
         for index in 0..self_.bitvector.get_bit_width() {
             match self_.bitvector.get_bit(index) {
                 Logic::Zero | Logic::Unknown => value.set_bit(index as u64, false),
-                Logic::One | Logic::HighImpedance => value.set_bit(index as u64, true),
+                Logic::One => value.set_bit(index as u64, true),
+                Logic::HighImpedance => value.set_bit(index as u64, !strict),
             }
         }
         Ok(value)

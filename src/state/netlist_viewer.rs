@@ -1,8 +1,9 @@
-use lazy_static::*;
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use lazy_static::*;
 use makai::utils::messages::Messages;
-use makai_vcd_reader::parser::{VcdScope, VcdVariable};
+use makai_vcd_reader::parser::{VcdHeader, VcdScope, VcdVariable};
 use tui::widgets::Widget;
 use tui::{
     buffer::Buffer,
@@ -11,6 +12,7 @@ use tui::{
 };
 use tui_tiling::component::ComponentWidget;
 
+use crate::widgets::browser::Visibility;
 use crate::{
     state::filter::{construct_filter, BrowserFilterSection},
     state::signal_viewer::SignalViewerMessage,
@@ -75,13 +77,13 @@ fn generate_new_node(
     let mut new_variables = new_scope
         .get_variables()
         .iter()
-        .map(|v| BrowserNode::new(Some(NetlistNode::Variable(v.clone()))))
+        .map(|v| BrowserNode::new(NetlistNode::Variable(v.clone())))
         .collect::<Vec<BrowserNode<NetlistNode>>>();
     new_variables.sort_by(|a, b| alphanumeric_sort::compare_str(&a.to_string(), &b.to_string()));
     // Create new node with proper expansion and the new scopes followed by new variables
     let entry = NetlistNode::Scope(new_scope.get_name().clone());
     new_scopes.append(&mut new_variables);
-    BrowserNode::from_expanded(Some(entry), old_node.is_expanded(), new_scopes)
+    BrowserNode::from(Some(entry), old_node.get_visibility(), new_scopes)
 }
 
 fn generate_new_nodes(
@@ -96,7 +98,7 @@ fn generate_new_nodes(
         .collect::<Vec<BrowserNode<NetlistNode>>>();
     // Sort the new child scope nodes
     new_scopes.sort_by(|a, b| alphanumeric_sort::compare_str(&a.to_string(), &b.to_string()));
-    BrowserNode::from_expanded(None, true, new_scopes)
+    BrowserNode::from(None, Visibility::Expanded, new_scopes)
 }
 
 #[derive(Clone)]
@@ -107,7 +109,7 @@ enum NetlistViewerAction {
 }
 
 pub(crate) enum NetlistViewerMessage {
-    UpdateScopes(Vec<VcdScope>),
+    WaveformUpdate { vcd_header: Arc<VcdHeader> },
 }
 
 pub struct NetlistViewerState {
@@ -122,7 +124,7 @@ impl NetlistViewerState {
     pub fn new(messages: Messages) -> Self {
         Self {
             state: BrowserState::new(true, true, false),
-            node: BrowserNode::from_expanded(None, true, Vec::new()),
+            node: BrowserNode::new_container(),
             filters: Vec::new(),
             border_width: 1,
             messages,
@@ -162,7 +164,10 @@ impl NetlistViewerState {
                 _ => None,
             })
             // Convert path to full names
-            .map(|(path, variable)| (self.node.get_full_name(path), variable.clone()))
+            .map(|(path, variable)| {
+                // log::info!("Full name: {:?}", self.node.get_full_name(path));
+                (self.node.get_full_name(path), variable.clone())
+            })
             .collect()
     }
 
@@ -185,7 +190,10 @@ impl NetlistViewerState {
             NetlistViewerAction::Expand => {
                 let path = self.state.get_primary_selected_path(&self.node);
                 if let Some(node) = self.node.get_node_mut(&path) {
-                    node.set_expanded(!node.is_expanded());
+                    match node.get_visibility() {
+                        Visibility::Collapsed => node.set_visibility(Visibility::Expanded),
+                        Visibility::Expanded => node.set_visibility(Visibility::Collapsed),
+                    }
                 }
                 Vec::new()
             }
@@ -234,8 +242,8 @@ impl ComponentWidget for NetlistViewerState {
         let mut updated = false;
         for message in self.messages.get::<NetlistViewerMessage>() {
             match message {
-                NetlistViewerMessage::UpdateScopes(scopes) => {
-                    self.update_scopes(&scopes);
+                NetlistViewerMessage::WaveformUpdate { vcd_header } => {
+                    self.update_scopes(&vcd_header.get_scopes());
                     updated = true;
                 }
             }
